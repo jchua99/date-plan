@@ -58,6 +58,18 @@ def leave_by(next_stop_time: str, trip_minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def is_tight(here: str, there: str, trip_minutes: int) -> bool:
+    """True when the trip takes longer than the time between two stops' start times.
+
+    The pair would then have to leave before `here` even starts. Compared as
+    times, not text ("9:00" vs "10:10"), and a next stop after midnight counts
+    as the next day.
+    """
+    start, arrive = parse_time(here), parse_time(there)
+    gap = (arrive.hour * 60 + arrive.minute - start.hour * 60 - start.minute) % (24 * 60)
+    return trip_minutes > gap
+
+
 def google_maps_link(origin: str, destination: str) -> str:
     """A Google Maps public-transport directions link. Needs no API key."""
     query = {
@@ -349,7 +361,7 @@ def plan_travel(itinerary: Itinerary, request: PlanRequest, client=None) -> Trav
     for i, (here, there) in enumerate(zip(stops, stops[1:])):
         leg = looker.leg(here.place, places[i], there.place, places[i + 1], request.day,
                          parse_time(here.time), there.time)
-        leg.tight = bool(leg.leave_by) and leg.leave_by < here.time
+        leg.tight = bool(leg.leave_by) and is_tight(here.time, there.time, leg.minutes)
         leg.google_url = google_maps_link(_where(here), _where(there))
         legs.append(leg)
 

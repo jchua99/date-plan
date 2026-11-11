@@ -98,7 +98,8 @@ def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
 
     Rules: 3-5 stops, every stop has an activity and a place, times are in
     order, nothing starts before the pair said they're free, and if they
-    picked a cuisine, some stop mentions it.
+    picked a cuisine, some stop mentions it. Each stop's time is rewritten
+    as HH:MM.
     """
     stops = itinerary.stops
     if not MIN_STOPS <= len(stops) <= MAX_STOPS:
@@ -109,6 +110,7 @@ def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
         if not stop.activity.strip() or not stop.place.strip():
             raise ItineraryError(f"Stop {number} is missing an activity or a place")
         when = parse_time(stop.time)
+        stop.time = f"{when:%H:%M}"  # store as HH:MM, so "9:00" shows as "09:00"
         if when < request.start_time:
             raise ItineraryError(f"Stop {number} starts before {request.start_time:%H:%M}")
         if previous is not None and when <= previous:

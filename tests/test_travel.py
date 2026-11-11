@@ -17,6 +17,7 @@ from travel import (
     decode_polyline,
     describe_route,
     google_maps_link,
+    is_tight,
     leave_by,
     plan_travel,
     search_variants,
@@ -160,6 +161,23 @@ def test_tight_when_leave_by_is_before_the_stop_starts():
     assert travel.legs[0].leave_by == "13:50"
     assert travel.legs[0].tight  # 13:50 is before the 14:00 coffee starts
     assert not travel.legs[1].tight  # 16:30 - 70 min = 15:20, after 15:00
+
+
+def test_tight_compares_times_not_text():
+    morning = GOOD.model_copy(update={"stops": [
+        s.model_copy(update={"time": t}) for s, t in zip(GOOD.stops, ["9:00", "10:30", "11:30"])
+    ]})
+    travel = plan_travel(morning, REQUEST, client=FakeOneMap(trip={**HAVELOCK_TRIP, "duration": 20 * 60}))
+    assert [(leg.leave_by, leg.tight) for leg in travel.legs] == [("10:10", False), ("11:10", False)]
+
+
+@pytest.mark.parametrize("here, there, minutes, tight", [
+    ("23:30", "00:30", 20, False),  # leave by 00:10, after 23:30 the night before
+    ("23:30", "00:10", 50, True),   # would have to leave at 23:20
+    ("14:00", "15:00", 60, False),  # leaving right as the stop starts is fine
+])
+def test_tight_across_midnight(here, there, minutes, tight):
+    assert is_tight(here, there, minutes) is tight
 
 
 def test_asks_onemap_for_trips_on_the_plan_day_leaving_at_each_stop_time():

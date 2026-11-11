@@ -39,6 +39,11 @@ def test_nothing_before_start_time():
         check_itinerary(make("13:30", "15:00", "16:00"), REQUEST)
 
 
+def test_times_are_stored_as_hh_mm():
+    plan = check_itinerary(make("14:00", "15:5", "16:30"), REQUEST)
+    assert [s.time for s in plan.stops] == ["14:00", "15:05", "16:30"]
+
+
 def test_bad_time_text():
     with pytest.raises(ItineraryError, match="not a time"):
         check_itinerary(make("2pm", "15:00", "16:00"), REQUEST)
