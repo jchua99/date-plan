@@ -136,6 +136,32 @@ def test_stops_after_max_turns_without_an_answer():
     assert result.reservable is None and len(model.sent) == 8
 
 
+def test_last_turn_forces_a_submit():
+    sent = []
+    model = ScriptedModel(*[[call("find_place", query="x")]] * 7, [call("submit", place_id="place-1", booking_url="", reason="r")])
+    original = model.chat.completions.create
+    model.chat.completions.create = lambda **kw: sent.append(kw) or original(**kw)
+    result = harness(model).check_stop(STOP, "x")
+    assert len(sent) == 8 and all("tool_choice" not in kw for kw in sent[:-1])
+    assert sent[-1]["tool_choice"] == {"type": "function", "function": {"name": "submit"}}
+    assert result.reservable is True and result.maps_url == MAPS
+
+
+@pytest.mark.parametrize("google_says", [True, False])
+def test_no_answer_falls_back_to_the_listing_the_address_check_matched(google_says):
+    place = {**PS_CAFE, "reservable": google_says}
+    shown = STOP.model_copy(update={"place_id": "place-1", "address": "28B Harding Rd, Singapore"})
+    model = ScriptedModel(*[[call("find_place", query="x")]] * 20)  # never submits
+    result = harness(model, places=[place]).check_stop(shown, "x")
+    assert result.reservable is google_says and result.booking_url == "" and result.maps_url == MAPS
+
+
+def test_no_fallback_when_find_place_never_returned_the_matched_listing():
+    shown = STOP.model_copy(update={"place_id": "other-outlet"})
+    model = ScriptedModel(*[[call("find_place", query="x")]] * 20)
+    assert harness(model).check_stop(shown, "x").reservable is None
+
+
 def test_reply_from_another_model_is_not_used():
     result = harness(ScriptedModel([call("find_place", query="x")], model="other-model")).check_stop(STOP, "x")
     assert result.reservable is None

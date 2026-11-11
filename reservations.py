@@ -116,6 +116,8 @@ TOOLS = [
         },
     },
 ]
+# Asks the model to call submit and nothing else.
+SUBMIT_NOW = {"type": "function", "function": {"name": "submit"}}
 
 
 class ReservationCheck(BaseModel):
@@ -419,7 +421,11 @@ class ReservationHarness:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": _describe(stop, area)},
         ]
-        for _ in range(MAX_TURNS):
+        for turn in range(MAX_TURNS):
+            extra = {}
+            if turn == MAX_TURNS - 1:
+                # Last turn: make the model answer with what it has, so the lookups aren't wasted.
+                extra["tool_choice"] = SUBMIT_NOW
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
@@ -428,6 +434,7 @@ class ReservationHarness:
                 reasoning_effort=REASONING_EFFORT,
                 messages=messages,
                 tools=TOOLS,
+                **extra,
             )
             if self.model not in (response.model or "").lower():
                 raise RuntimeError(f"reply came from {response.model!r}")
@@ -455,6 +462,11 @@ class ReservationHarness:
     def _verify(self, session: _Session, stop: Stop | None = None) -> ReservationCheck:
         answer = session.answer or {}
         place = session.places.get(str(answer.get("place_id", "")))
+        if place is None and stop is not None and stop.place_id and stop.place_id in session.places:
+            # No usable answer, but find_place returned the listing the address check matched:
+            # keep Google's answer for it. No booking link, since none was submitted for it.
+            place = session.places[stop.place_id]
+            answer = {"reason": "Used Google's listing for this place."}
         if place is None:
             return ReservationCheck(reservable=None, reason="Couldn't match the place on Google.")
         if stop is not None and stop.place_id and place.get("id") != stop.place_id:
