@@ -14,6 +14,7 @@ from itinerary import (
     Itinerary,
     ItineraryError,
     MissingCuisineError,
+    PlannedItinerary,
     PlanRequest,
     check_itinerary,
 )
@@ -138,7 +139,7 @@ def _checked_plan(client, request: PlanRequest, avoid: list[str]) -> Itinerary:
     """Ask for a plan and check it follows the rules, or raise PlanError."""
     # GLM-5.3 Flash reasons before it answers, and its reasoning counts toward
     # max_tokens. Now and then it reasons for so long that no answer is left, so
-    # allow plenty of room and ask once more if the reply can't be read.
+    # allow plenty of room and ask once more if no plan came back.
     for attempt in range(1, ATTEMPTS + 1):
         itinerary = _ask_for_plan(client, request, avoid)
         if itinerary is not None:
@@ -156,16 +157,63 @@ def _checked_plan(client, request: PlanRequest, avoid: list[str]) -> Itinerary:
 
 
 def _ask_for_plan(client, request: PlanRequest, avoid: list[str] = ()) -> Itinerary | None:
-    """One request to the model. Returns None if the reply can't be read as a plan."""
+    """One request to the model. Returns None if no plan came back (cut off, refused, unreadable)."""
+    request_args = dict(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_prompt(request, avoid)},
+        ],
+    )
     try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_prompt(request, avoid)},
-            ],
-        )
+        # Structured output: OpenCode makes the model's reply follow PlannedItinerary's schema.
+        response = _call(client.chat.completions.parse, response_format=PlannedItinerary, **request_args)
+    except openai.BadRequestError:
+        logger.warning("OpenCode rejected the strict-schema request; falling back to free-text JSON")
+        return _ask_free_text(client, request_args)
+    except (openai.LengthFinishReasonError, openai.ContentFilterFinishReasonError) as problem:
+        logger.warning("No plan in reply: %s", problem)
+        return None
+    except pydantic.ValidationError as problem:
+        logger.warning("Plan reply didn't match the schema: %s", problem)
+        return None
+
+    _check_model(response)
+    message = response.choices[0].message if response.choices else None
+    if message is None or message.parsed is None:
+        logger.warning("No plan in reply (refusal: %r)", getattr(message, "refusal", None))
+        return None
+    return message.parsed.to_itinerary()
+
+
+def _ask_free_text(client, request_args: dict) -> Itinerary | None:
+    """The old way, for when the strict schema isn't accepted: find the JSON in a free-text reply."""
+    try:
+        response = _call(client.chat.completions.create, **request_args)
+    except openai.BadRequestError:
+        raise PlanError(TRY_AGAIN) from None
+    _check_model(response)
+    reply = response.choices[0].message.content if response.choices else None
+    try:
+        itinerary = read_itinerary(reply or "")
+    except (ValueError, pydantic.ValidationError):
+        return None
+    # Only the Google checks may fill these in, never the planning model. (With the strict
+    # schema above the model can't write them at all.)
+    unchecked = {"maps_url": "", "checked": False, "address": "", "place_id": ""}
+    return itinerary.model_copy(update={"stops": [s.model_copy(update=unchecked) for s in itinerary.stops]})
+
+
+def _call(method, **kwargs):
+    """Make one API call, turning connection and account problems into PlanErrors the pair can act on.
+
+    A bad request, a cut-off reply or a refusal is left for the caller.
+    """
+    try:
+        return method(**kwargs)
+    except (openai.BadRequestError, openai.LengthFinishReasonError, openai.ContentFilterFinishReasonError):
+        raise
     except openai.AuthenticationError:
         raise PlanError("The OpenCode API key is missing or wrong. Check your .env file.") from None
     except openai.PermissionDeniedError:
@@ -179,18 +227,11 @@ def _ask_for_plan(client, request: PlanRequest, avoid: list[str] = ()) -> Itiner
     except openai.OpenAIError:
         raise PlanError(TRY_AGAIN) from None
 
-    # Only accept a plan that this model actually wrote.
+
+def _check_model(response) -> None:
+    """Only accept a plan that this model actually wrote."""
     if MODEL not in (response.model or "").lower():
         raise PlanError(f"The plan came from {response.model!r}, not {MODEL_LABEL}, so it wasn't used.")
-
-    reply = response.choices[0].message.content if response.choices else None
-    try:
-        itinerary = read_itinerary(reply or "")
-    except (ValueError, pydantic.ValidationError):
-        return None
-    # Only the Google checks may fill these in, never the planning model.
-    unchecked = {"maps_url": "", "checked": False, "address": "", "place_id": ""}
-    return itinerary.model_copy(update={"stops": [s.model_copy(update=unchecked) for s in itinerary.stops]})
 
 
 def _finish(itinerary: Itinerary, request: PlanRequest, client, link_checker) -> Itinerary:
