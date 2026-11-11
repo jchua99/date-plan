@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +50,12 @@ PLACES_FIELDS = ",".join(
 SINGAPORE = {"circle": {"center": {"latitude": 1.3521, "longitude": 103.8198}, "radius": 30000.0}}
 
 MAX_TURNS = 8
+# Each lookup is a paid Google request or a page load of up to TIMEOUT_SECONDS, and the
+# plan waits for every stop's check. So a stop gets at most this many lookups per turn,
+# this many in all, and this long in all. submit is always allowed.
+MAX_TOOL_CALLS_PER_TURN = 4
+MAX_TOOL_CALLS_PER_STOP = 12
+STOP_BUDGET_SECONDS = 60
 MAX_TOKENS = 8000  # reasoning tokens count toward this too
 REASONING_EFFORT = "low"
 MAX_PAGE_BYTES = 600_000
@@ -419,7 +426,11 @@ class ReservationHarness:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": _describe(stop, area)},
         ]
+        deadline = time.monotonic() + STOP_BUDGET_SECONDS
+        used = 0  # lookups run so far for this stop
         for _ in range(MAX_TURNS):
+            if used >= MAX_TOOL_CALLS_PER_STOP or time.monotonic() >= deadline:
+                break
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
@@ -443,8 +454,19 @@ class ReservationHarness:
                     for c in calls
                 ],
             })
+            this_turn = 0
             for call in calls:
-                result = self._call_tool(session, call.function.name, call.function.arguments)
+                # Every call still gets a reply, or the next request is rejected.
+                if call.function.name == "submit":
+                    result = self._call_tool(session, call.function.name, call.function.arguments)
+                elif this_turn >= MAX_TOOL_CALLS_PER_TURN:
+                    result = {"error": f"Too many tool calls at once; at most {MAX_TOOL_CALLS_PER_TURN} per turn."}
+                elif used >= MAX_TOOL_CALLS_PER_STOP or time.monotonic() >= deadline:
+                    result = {"error": "No more lookups for this place. Call submit with what you have."}
+                else:
+                    this_turn += 1
+                    used += 1
+                    result = self._call_tool(session, call.function.name, call.function.arguments)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)})
             if session.answer is not None:
                 break

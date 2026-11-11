@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from itinerary import Itinerary, Stop
+import reservations
 from reservations import ReservationHarness, looks_like_booking
 
 MODEL = "glm-5.3-flash"
@@ -134,6 +135,58 @@ def test_stops_after_max_turns_without_an_answer():
     model = ScriptedModel(*[[call("find_place", query="x")]] * 20)
     result = harness(model).check_stop(STOP, "x")
     assert result.reservable is None and len(model.sent) == 8
+
+
+def counting_harness(model):
+    """A harness whose searches are counted in h.searches."""
+    h = harness(model)
+    h.searches = 0
+
+    def search(query, key):
+        h.searches += 1
+        return [PS_CAFE]
+
+    h.search = search
+    return h
+
+
+def test_tool_calls_are_capped_per_turn_and_per_stop():
+    many = [call("find_place", query=f"x{i}") for i in range(30)]
+    model = ScriptedModel(*[many] * 20)
+    h = counting_harness(model)
+    result = h.check_stop(STOP, "x")
+    assert result.reservable is None
+    assert h.searches == reservations.MAX_TOOL_CALLS_PER_STOP == 12
+    assert len(model.sent) == 3  # 4 lookups a turn, then the stop's budget is used up
+    replies = [m for m in model.sent[1] if m["role"] == "tool"]
+    assert len(replies) == 30  # every call still gets an answer
+    errors = [json.loads(m["content"]).get("error") for m in replies]
+    assert errors[:4] == [None] * 4
+    assert set(errors[4:]) == {"Too many tool calls at once; at most 4 per turn."}
+
+
+def test_submit_is_always_allowed():
+    calls = [call("find_place", query=f"x{i}") for i in range(6)]
+    calls.append(call("submit", place_id="place-1", booking_url="", reason="r"))
+    h = counting_harness(ScriptedModel(calls))
+    result = h.check_stop(STOP, "x")
+    assert h.searches == 4 and result.reservable is True and result.maps_url == MAPS
+
+
+def test_stop_check_has_a_time_budget(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(reservations, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    model = ScriptedModel(*[[call("find_place", query="a"), call("find_place", query="b"), call("find_place", query="c")]] * 8)
+    h = counting_harness(model)
+    search = h.search
+
+    def slow_search(query, key):
+        now[0] += 30  # each lookup takes half the budget
+        return search(query, key)
+
+    h.search = slow_search
+    h.check_stop(STOP, "x")
+    assert h.searches == 2 and len(model.sent) == 1  # the third lookup and the next turn are skipped
 
 
 def test_reply_from_another_model_is_not_used():
