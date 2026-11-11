@@ -380,7 +380,10 @@ class ReservationHarness:
         reader.feed(html)
         booking, other = [], []
         for href, text in reader.links:
-            link = _clean(urljoin(final, href))
+            try:
+                link = _clean(urljoin(final, href))
+            except ValueError:  # a broken link, e.g. "https://[oops/book": skip it, keep the rest
+                continue
             if not looks_safe(link) or link in booking or link in other:
                 continue
             session.seen_urls.add(link)

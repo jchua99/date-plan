@@ -117,6 +117,12 @@ def test_non_platform_booking_link_must_load():
     assert harness(happy_path(booking_url=own), pages=pages, loads=lambda u: True).check_stop(STOP, "x").booking_url == own
 
 
+def test_a_broken_link_on_the_page_is_skipped_and_the_rest_are_kept():
+    pages = {SITE: f'<a href="https://[oops/book">Book</a> <a href="{CHOPE}">Reserve a table</a>'}
+    result = harness(happy_path(), pages=pages).check_stop(STOP, "Dempsey Hill")
+    assert result.reservable is True and result.booking_url == CHOPE
+
+
 def test_model_can_only_open_links_it_was_given():
     model = ScriptedModel(
         [call("find_place", query="x")],
