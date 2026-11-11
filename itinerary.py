@@ -3,7 +3,9 @@
 from datetime import date, time
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, field_validator
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MIN_STOPS = 3
 MAX_STOPS = 5
@@ -75,6 +77,36 @@ class Itinerary(BaseModel):
 
     title: str
     stops: list[Stop]
+
+
+# "HH:MM", 24-hour. Sent to the model as part of the schema, so it can't write "2pm".
+HHMM = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
+
+
+class PlannedStop(BaseModel):
+    """One stop as the model writes it. This is the schema the model's reply must follow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time: Annotated[str, Field(pattern=HHMM)]
+    activity: str
+    place: str
+    note: str
+    reservable: bool
+    booking_url: str  # "" if the model doesn't know one
+
+
+class PlannedItinerary(BaseModel):
+    """The plan as the model writes it: only the fields it's allowed to fill in."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    stops: Annotated[list[PlannedStop], Field(min_length=MIN_STOPS, max_length=MAX_STOPS)]
+
+    def to_itinerary(self) -> Itinerary:
+        """The full plan, with the checked fields (maps_url, checked) left for the checks to fill in."""
+        return Itinerary(title=self.title, stops=[Stop(**stop.model_dump()) for stop in self.stops])
 
 
 class ItineraryError(ValueError):

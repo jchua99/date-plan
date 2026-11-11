@@ -49,6 +49,16 @@ If it goes wrong: they see random date ideas that don't fit either of them, and 
   - The form gets one optional, shared "Starting from" box. If filled in, there is also a leg from there to stop 1. It doesn't change which places the model picks.
   - Travel problems never block the plan. If a place isn't found, there's no route, the date is more than a month ahead (OneMap's limit), OneMap is down or the login isn't set up, that leg says it couldn't get the travel time and keeps its Google Maps link. The map shows the stops that were found and is hidden if none were.
 
+- **Structured output (decided 2026-11-11).** The model's plan comes back already in our shape, instead of free text we hunt through for JSON.
+  - The planner asks OpenCode for strict JSON-schema output (`response_format` `json_schema`, `strict`). This was checked with real calls to `glm-5.3-flash`: OpenCode really enforces the schema, even when the prompt asks for something else.
+  - The schema comes from separate pydantic models that hold only what the model writes: title, and for each stop the time, activity, place, note, reservable and booking_url. Times must look like HH:MM, there must be 3–5 stops, and no extra keys are allowed. The model can't write `maps_url` or `checked`.
+  - Cuisine stays a loose text check, not a schema enum.
+  - `check_itinerary` stays as the safety net for rules a schema can't express: times in order, nothing before "free from", and the picked cuisine mentioned.
+  - If OpenCode rejects the strict-schema option ("bad request"), that request falls back once to the old free-text JSON way and logs a warning. Nothing else triggers the fallback.
+  - The model can still run out of room while reasoning. A truncated or empty reply is retried once. If that fails too, or the model refuses, the pair sees the usual "Couldn't make a plan this time. Please try again." and the real reason is logged.
+  - The reservation check's tools (find_place, fetch_page, submit) are marked strict too. If OpenCode rejects that, the check retries that call without strict. Travel uses OneMap only, with no model call, so it is unchanged.
+  - Tests use a fake client and run offline. One live test calls OpenCode for real and runs only with `pytest --live`.
+
 ## Not building
 - Anything that matches people or replaces the platform they met on.
 - Messaging between the pair. The plan itself is the shared object.

@@ -34,10 +34,16 @@ Open http://127.0.0.1:5001, then fill in the day, start time and area (and, if y
 
 The tests use a fake model and a fake OneMap, so they're free and work offline.
 
+To also check that OpenCode still returns the plan as structured output, run the one live test. It uses your `OPENCODE_API_KEY`, takes about 30 seconds and costs a fraction of a cent:
+
+```bash
+.venv/bin/pytest --live tests/test_live.py
+```
+
 ## Files
 
 - `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
-- `planner.py` asks GLM-5.3 Flash for a plan, rejects replies from any other model, and turns any failure into a friendly message.
+- `planner.py` asks GLM-5.3 Flash for a plan as structured output (OpenCode makes the reply follow the `PlannedItinerary` schema in `itinerary.py`), rejects replies from any other model, and turns any failure into a friendly message.
 - `links.py` checks the reservation links the model suggests. Stops the model thinks take bookings get a **Reserve** button that opens the place's booking page in a new tab. Without a Google key, the model's links are guesses: any that don't load are dropped, and the button searches for the place's booking page instead.
 - `reservations.py` holds the Google checks, used when `GOOGLE_PLACES_API_KEY` is set.
   - **Every stop is looked up on Google Maps by name.** If Google lists it as closed (for good or for now), the planner is asked again without it. Otherwise each stop is shown with Google's name and address, which links to Google Maps, never the planner's address. Stops Google doesn't list (streets, walks) show just their name.
