@@ -167,10 +167,29 @@ def test_failed_check_keeps_planner_guess_but_drops_its_unchecked_link():
         ("https://pscafe.example/reservations", "", True),
         ("https://pscafe.example/menu", "Book a table", True),
         ("https://pscafe.example/menu", "Menu", False),
+        ("https://pscafe.example/book-a-table", "", True),
+        ("https://pscafe.example/book_now", "", True),
+        ("https://pscafe.example/reserve", "", True),
+        ("https://pscafe.example/menu/vegetables", "Veg", False),
+        ("https://pscafe.example/notebook", "Notebook", False),
+        ("https://pscafe.example/timetable", "Timetable", False),
+        ("https://www.facebook.com/pscafe", "Facebook", False),
+        ("https://www.facebook.com/pscafe/book", "Book now", False),
+        ("https://www.instagram.com/pscafe", "Reserve on Instagram", False),
+        ("https://wa.me/6512345678", "Book via WhatsApp", False),
+        ("https://x.com/pscafe", "Reservations", False),
     ],
 )
 def test_booking_link_detection(url, text, expected):
     assert looks_like_booking(url, text) is expected
+
+
+@pytest.mark.parametrize("link", ["https://www.facebook.com/pscafe", f"{SITE}/menu/vegetables"])
+def test_social_and_menu_links_are_not_accepted_as_booking_pages(link):
+    pages = {SITE: f'<a href="https://www.facebook.com/pscafe" aria-label="Facebook">f</a> <a href="/menu/vegetables">Veg</a>'}
+    result = harness(happy_path(booking_url=link), pages=pages).check_stop(STOP, "Dempsey Hill")
+    assert result.booking_url == ""
+    assert result.reservable is True  # still Google's answer, not the link's
 
 
 def test_http_website_from_google_is_upgraded_to_https_so_it_can_be_opened():

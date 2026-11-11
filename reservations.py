@@ -60,7 +60,17 @@ BOOKING_HOSTS = (
     "quandoo.com", "eatigo.com", "inline.app", "resy.com", "tock.com", "exploretock.com",
     "hungrygowhere.com", "book.dinesuperb.com", "reserve.google.com", "fave.co", "klook.com",
 )
-BOOKING_WORDS = re.compile(r"reserv|book|table|chope", re.IGNORECASE)
+# Whole words only, so "Facebook", "notebook" and "vegetables" don't count. Words in a link
+# are split by anything that isn't a letter or digit: "/book-a-table", "book_now".
+BOOKING_WORDS = re.compile(
+    r"(?<![a-z0-9])(?:reserv(?:e|es|ed|ing|ation|ations)?|book(?:s|ing|ings)?|tables?|chope)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+# Social media and chat links are never a booking page, even when their text says "Book".
+SOCIAL_HOSTS = (
+    "facebook.com", "fb.com", "fb.me", "instagram.com", "tiktok.com", "x.com", "twitter.com",
+    "youtube.com", "youtu.be", "wa.me", "whatsapp.com", "threads.net", "linkedin.com",
+)
 
 SYSTEM_PROMPT = """\
 You check whether a place in Singapore takes reservations, and find its online booking page.
@@ -301,12 +311,20 @@ def read_page(url: str) -> tuple[str, str]:
         return final, response.read(MAX_PAGE_BYTES).decode(response.headers.get_content_charset() or "utf-8", "replace")
 
 
-def on_booking_platform(url: str) -> bool:
+def _on_host(url: str, hosts: tuple[str, ...]) -> bool:
     host = (urlsplit(url).hostname or "").lower()
-    return any(host == h or host.endswith("." + h) for h in BOOKING_HOSTS)
+    return any(host == h or host.endswith("." + h) for h in hosts)
+
+
+def on_booking_platform(url: str) -> bool:
+    return _on_host(url, BOOKING_HOSTS)
 
 
 def looks_like_booking(url: str, text: str = "") -> bool:
+    """True for a known booking platform, or a link whose path or text has a booking word
+    ("reserve", "book", "table", "chope") as a whole word. Social media links never count."""
+    if _on_host(url, SOCIAL_HOSTS):
+        return False
     if on_booking_platform(url):
         return True
     parts = urlsplit(url)
