@@ -343,6 +343,8 @@ def test_find_tries_the_name_before_the_comma(monkeypatch):
         ),
         ("Gardens by the Bay and Marina Barrage", ["Gardens by the Bay and Marina Barrage", "Gardens by the Bay", "Marina Barrage"]),
         ("Seng Poh Lane to Yong Siak Street", ["Seng Poh Lane to Yong Siak Street", "Seng Poh Lane", "Yong Siak Street"]),
+        # Asides in brackets are dropped:
+        ("Tiong Bahru Bakery, Eng Hoon Street (4-min walk)", ["Tiong Bahru Bakery, Eng Hoon Street", "Tiong Bahru Bakery", "Eng Hoon Street"]),
     ],
 )
 def test_search_variants_go_from_exact_to_looser(text, expected):

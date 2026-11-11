@@ -111,8 +111,9 @@ def search_variants(text: str) -> list[str]:
     The model writes things like "BooksActually, 115 Yong Siak Street" or
     "Tiong Bahru estate & Seng Poh Garden", which OneMap can't find whole.
     So also try each comma part, each half of "A & B" / "A and B" / "A to B", and
-    addresses without the house number.
+    addresses without the house number. Asides in brackets are dropped.
     """
+    text = re.sub(r"\s*\([^)]*\)", "", text)  # drop asides like "(5-min walk)"
     parts = [part.strip() for part in text.split(",") if part.strip()]
     pieces = [piece.strip() for part in parts for piece in re.split(r"\s+(?:&|and|to)\s+", part) if piece.strip()]
     streets = [re.sub(r"^\d+[A-Za-z]?\s+", "", piece) for piece in pieces]
