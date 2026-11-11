@@ -6,16 +6,21 @@ import pydantic
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
 
-from itinerary import PlanRequest
+from itinerary import CUISINES, NO_PREFERENCE, PlanRequest
 from planner import PlanError, suggest_plan
 
 
 def create_app(planner=suggest_plan) -> Flask:
     app = Flask(__name__)
 
+    @app.context_processor
+    def cuisines():
+        return {"cuisines": CUISINES}
+
     @app.get("/")
     def home():
-        return render_template("index.html", form={"day": date.today().isoformat(), "start_time": "14:00", "area": ""})
+        form = {"day": date.today().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE}
+        return render_template("index.html", form=form)
 
     @app.post("/plan")
     def plan():

@@ -15,6 +15,26 @@ def test_home_shows_the_form():
     page = client_with(lambda r: GOOD).get("/").get_data(as_text=True)
     assert "Suggest a plan" in page
     assert 'name="area"' in page
+    assert '<select name="cuisine">' in page
+    for cuisine in ("Chinese", "Indian", "Malay", "Mexican"):
+        assert f'<option value="{cuisine}">' in page
+    assert '<option value="No preference" selected>' in page
+
+
+def test_picked_cuisine_reaches_planner_and_stays_selected():
+    asked = []
+    response = client_with(lambda r: asked.append(r) or GOOD).post("/plan", data={**FORM, "cuisine": "Indian"})
+    assert response.status_code == 200
+    assert asked[0].cuisine == "Indian"
+    assert '<option value="Indian" selected>' in response.get_data(as_text=True)
+
+
+def test_unknown_cuisine_asks_again_without_calling_the_model():
+    calls = []
+    response = client_with(lambda r: calls.append(r)).post("/plan", data={**FORM, "cuisine": "Martian"})
+    assert response.status_code == 400
+    assert "Please fill in" in response.get_data(as_text=True)
+    assert calls == []
 
 
 def test_plan_shows_itinerary_with_times_and_places():
@@ -47,3 +67,11 @@ def test_planner_problem_is_shown_and_form_kept():
     assert response.status_code == 502
     assert "Couldn&#39;t make a plan" in page
     assert 'value="Tiong Bahru"' in page
+
+
+def test_cuisine_kept_after_planner_problem():
+    def failing(_):
+        raise PlanError("Couldn't make a plan this time. Please try again.")
+
+    response = client_with(failing).post("/plan", data={**FORM, "cuisine": "Thai"})
+    assert '<option value="Thai" selected>' in response.get_data(as_text=True)
