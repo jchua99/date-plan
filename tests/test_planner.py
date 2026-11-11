@@ -6,7 +6,7 @@ import openai
 import pytest
 
 from itinerary import Itinerary, PlanRequest, Stop
-from planner import PlanError, build_prompt, read_itinerary, suggest_plan
+from planner import SYSTEM_PROMPT, PlanError, build_prompt, read_itinerary, suggest_plan
 
 REQUEST = PlanRequest(day=date(2026, 11, 14), start_time=time(14, 0), area="Tiong Bahru")
 
@@ -57,6 +57,28 @@ def test_asks_glm_flash_with_pair_details():
 
 def test_prompt_text():
     assert build_prompt(REQUEST) == "Day: Saturday 14 November 2026\nFree from: 14:00\nArea: Tiong Bahru"
+
+
+def test_prompt_includes_picked_cuisine():
+    malay = REQUEST.model_copy(update={"cuisine": "Malay"})
+    assert build_prompt(malay).endswith("\nCuisine: Malay")
+
+
+def test_system_prompt_asks_for_a_meal_of_the_cuisine():
+    assert "meal" in SYSTEM_PROMPT and "cuisine" in SYSTEM_PROMPT
+
+
+def test_plan_with_picked_cuisine_is_accepted():
+    plan = GOOD.model_copy(deep=True)
+    plan.stops[2].activity = "Malay dinner"
+    malay = REQUEST.model_copy(update={"cuisine": "Malay"})
+    assert suggest_plan(malay, client=FakeClient(reply=plan.model_dump_json())) == plan
+
+
+def test_plan_missing_picked_cuisine_becomes_friendly_error():
+    malay = REQUEST.model_copy(update={"cuisine": "Malay"})
+    with pytest.raises(PlanError, match="didn't include a Malay meal"):
+        suggest_plan(malay, client=FakeClient())
 
 
 def test_reply_from_another_model_is_rejected():

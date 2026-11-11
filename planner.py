@@ -6,7 +6,16 @@ import os
 import openai
 import pydantic
 
-from itinerary import MAX_STOPS, MIN_STOPS, Itinerary, ItineraryError, PlanRequest, check_itinerary
+from itinerary import (
+    MAX_STOPS,
+    MIN_STOPS,
+    NO_PREFERENCE,
+    Itinerary,
+    ItineraryError,
+    MissingCuisineError,
+    PlanRequest,
+    check_itinerary,
+)
 
 MODEL = "glm-5.3-flash"
 MODEL_LABEL = "GLM-5.3 Flash"
@@ -28,6 +37,10 @@ For each stop give: the start time as HH:MM in 24-hour time, the activity, the \
 place, and a one-line note on why it helps them get to know each other. The \
 first stop starts at the time they give. Give the plan a short, friendly title.
 
+If they give a cuisine, one of the stops must be a meal at a real place that \
+serves that cuisine, and that stop's activity must name the cuisine, for \
+example "Malay lunch".
+
 Reply with only a JSON object, no other text, in exactly this shape:
 {{"title": "...", "stops": [{{"time": "14:00", "activity": "...", "place": "...", "note": "..."}}]}}"""
 
@@ -39,12 +52,15 @@ class PlanError(Exception):
 
 
 def build_prompt(request: PlanRequest) -> str:
-    return (
+    prompt = (
         # Build the day number separately: "%-d" only works on macOS/Linux.
         f"Day: {request.day:%A} {request.day.day} {request.day:%B %Y}\n"
         f"Free from: {request.start_time:%H:%M}\n"
         f"Area: {request.area}"
     )
+    if request.cuisine != NO_PREFERENCE:
+        prompt += f"\nCuisine: {request.cuisine}"
+    return prompt
 
 
 def read_itinerary(text: str) -> Itinerary:
@@ -97,5 +113,7 @@ def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
 
     try:
         return check_itinerary(itinerary, request)
+    except MissingCuisineError:
+        raise PlanError(f"The suggested plan didn't include a {request.cuisine} meal. Please try again.") from None
     except ItineraryError:
         raise PlanError("The suggested plan didn't quite add up. Please try again.") from None
