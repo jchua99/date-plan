@@ -1,3 +1,4 @@
+import io
 import json
 import urllib.error
 from types import SimpleNamespace
@@ -5,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from itinerary import Itinerary, Stop
+import reservations
 from reservations import ReservationHarness, looks_like_booking
 
 MODEL = "glm-5.3-flash"
@@ -55,8 +57,21 @@ def harness(model, places=(PS_CAFE,), pages=None, loads=lambda url: True):
             raise urllib.error.URLError("not found")
         return url, pages[url]
 
-    h = ReservationHarness(model, MODEL, "key", search=lambda q, k: list(places), fetch=fetch, loads=loads)
-    h.fetched = fetched
+    searched, looked_up = [], []
+
+    def search(query, key):
+        searched.append(query)
+        return list(places)
+
+    def details(place_id, key):
+        looked_up.append(place_id)
+        for place in places:
+            if place["id"] == place_id:
+                return place
+        raise urllib.error.HTTPError(f"https://places.example/{place_id}", 404, "Not Found", {}, None)
+
+    h = ReservationHarness(model, MODEL, "key", search=search, fetch=fetch, loads=loads, details=details)
+    h.fetched, h.searched, h.looked_up = fetched, searched, looked_up
     return h
 
 
@@ -209,3 +224,57 @@ def test_maps_link_from_the_address_check_is_kept():
     shown = STOP.model_copy(update={"place_id": "place-1", "maps_url": "https://maps.google.com/?cid=shown"})
     checked = harness(happy_path()).check_itinerary(Itinerary(title="T", stops=[shown]), "Dempsey Hill")
     assert checked.stops[0].maps_url == "https://maps.google.com/?cid=shown"
+
+
+def test_listing_matched_by_the_address_check_is_fetched_by_id_not_searched_again():
+    shown = STOP.model_copy(update={"place_id": "place-1", "address": "28B Harding Rd, Singapore"})
+    model = ScriptedModel(
+        [call("fetch_page", url=SITE)],
+        [call("submit", place_id="place-1", booking_url=CHOPE, reason="Chope link on homepage")],
+    )
+    h = harness(model)
+    result = h.check_stop(shown, "Dempsey Hill")
+    assert h.looked_up == ["place-1"] and h.searched == []
+    assert result.reservable is True and result.booking_url == CHOPE and result.maps_url == MAPS
+    brief = model.sent[0][1]["content"]
+    assert "Already found on Google" in brief and '"id": "place-1"' in brief and SITE in brief
+
+
+def test_find_place_still_works_when_the_details_lookup_fails():
+    shown = STOP.model_copy(update={"place_id": "place-1", "address": "28B Harding Rd, Singapore"})
+    model = happy_path()
+    h = harness(model)
+    h.details = lambda place_id, key: (_ for _ in ()).throw(urllib.error.URLError("down"))
+    result = h.check_stop(shown, "Dempsey Hill")
+    assert len(h.searched) == 1 and result.booking_url == CHOPE
+    assert "Already found" not in model.sent[0][1]["content"]
+
+
+def test_stops_without_a_place_id_are_not_looked_up_by_id():
+    h = harness(happy_path())
+    h.check_stop(STOP, "Dempsey Hill")
+    assert h.looked_up == [] and len(h.searched) == 1
+
+
+def test_place_details_asks_for_one_place_by_id(monkeypatch):
+    sent = []
+
+    class Reply(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(request, timeout):
+        sent.append(request)
+        return Reply(json.dumps(PS_CAFE).encode())
+
+    monkeypatch.setattr(reservations.urllib.request, "urlopen", urlopen)
+    assert reservations.place_details("place-1", "key") == PS_CAFE
+    request = sent[0]
+    assert request.full_url == "https://places.googleapis.com/v1/places/place-1" and request.get_method() == "GET"
+    assert request.get_header("X-goog-api-key") == "key"
+    assert request.get_header("X-goog-fieldmask") == (
+        "id,displayName,formattedAddress,businessStatus,reservable,websiteUri,googleMapsUri"
+    )

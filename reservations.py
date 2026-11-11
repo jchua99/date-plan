@@ -7,9 +7,13 @@ For each stop the planner thinks is bookable, the model gets three tools:
 - fetch_page: open a web page and list the booking-looking links on it.
 - submit: give its answer.
 
+When the Google Maps check already matched the stop to a listing, that one
+listing is fetched by its id and given to the model up front, so the place
+isn't searched for a second time; find_place is for the stops it couldn't match.
+
 The model's answer is not trusted on its own. The harness then checks it:
 
-- The place must be one find_place actually returned.
+- The place must be one Google actually returned.
 - A booking link must be one the harness actually saw (on a fetched page or
   from Google), must pass the same safety rules and load check as links.py,
   and must look like a booking page (a known booking platform, or "reserve" /
@@ -30,7 +34,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from pydantic import BaseModel
 
@@ -45,6 +49,9 @@ PLACES_FIELDS = ",".join(
     f"places.{name}"
     for name in ("id", "displayName", "formattedAddress", "businessStatus", "reservable", "websiteUri", "googleMapsUri")
 )
+# One place by its id, for stops the Google Maps check already matched.
+DETAILS_URL = "https://places.googleapis.com/v1/places/"
+DETAILS_FIELDS = "id,displayName,formattedAddress,businessStatus,reservable,websiteUri,googleMapsUri"
 # Roughly the middle of Singapore, so searches prefer local places.
 SINGAPORE = {"circle": {"center": {"latitude": 1.3521, "longitude": 103.8198}, "radius": 30000.0}}
 
@@ -66,7 +73,8 @@ SYSTEM_PROMPT = """\
 You check whether a place in Singapore takes reservations, and find its online booking page.
 
 Steps:
-1. Call find_place with the place's name and area. Pick the result that is \
+1. If the brief says the place is already found on Google, skip this step. \
+Otherwise call find_place with the place's name and area. Pick the result that is \
 the same place (name and address match). If none match, try one other search.
 2. If the place has a website, call fetch_page on it and look for a \
 reservation or booking link (its own booking page, or Chope, SevenRooms, \
@@ -140,6 +148,16 @@ def search_places(query: str, key: str, fields: str = PLACES_FIELDS, size: int =
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         return json.load(response).get("places", [])
+
+
+def place_details(place_id: str, key: str, fields: str = DETAILS_FIELDS) -> dict:
+    """One place by its Google id, with whether it takes reservations and its website."""
+    request = urllib.request.Request(
+        DETAILS_URL + quote(place_id, safe=""),
+        headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": fields},
+    )
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        return json.load(response)
 
 
 # --- Checking every place against Google Maps ---
@@ -326,10 +344,16 @@ class _Session:
     answer: dict | None = None
 
 
-def _describe(stop: Stop, area: str) -> str:
-    """The model's brief for one stop. Google's address, when known, pins down which outlet."""
+def _describe(stop: Stop, area: str, found: dict | None = None) -> str:
+    """The model's brief for one stop. Google's address, when known, pins down which outlet.
+    `found` is the place's Google listing when it's already been looked up (as find_place shows it)."""
     lines = [f"Place: {stop.place}"]
-    if stop.address:
+    if found:
+        lines.append(
+            f"Already found on Google (no need to call find_place): {json.dumps(found)}. "
+            f"Open its website with fetch_page if it has one, then submit with place_id {found['id']!r}."
+        )
+    elif stop.address:
         lines.append(f"Address (from Google Maps): {stop.address}. Pick the find_place result at this address.")
     lines += [f"Area: {area}, Singapore", f"What they'll do there: {stop.activity}"]
     return "\n".join(lines)
@@ -340,30 +364,49 @@ def _clean(url: str) -> str:
 
 
 class ReservationHarness:
-    def __init__(self, client, model: str, places_key: str, search=search_places, fetch=read_page, loads=page_loads):
+    def __init__(
+        self, client, model: str, places_key: str,
+        search=search_places, fetch=read_page, loads=page_loads, details=place_details,
+    ):
         self.client, self.model, self.places_key = client, model, places_key
-        self.search, self.fetch, self.loads = search, fetch, loads
+        self.search, self.fetch, self.loads, self.details = search, fetch, loads, details
 
     # Tools the model can call
 
+    def _remember(self, session: _Session, place: dict) -> dict:
+        """Keep a Google listing so the model's answer can be checked against it; return it as the model sees it."""
+        # Google often lists websites as http://; only https pages are opened, so upgrade them.
+        if (place.get("websiteUri") or "").startswith("http://"):
+            place = {**place, "websiteUri": "https://" + place["websiteUri"][len("http://"):]}
+        session.places[place.get("id", "")] = place
+        for key in ("websiteUri", "googleMapsUri"):
+            if place.get(key):
+                session.seen_urls.add(_clean(place[key]))
+        return {
+            "id": place.get("id", ""),
+            "name": (place.get("displayName") or {}).get("text", ""),
+            "address": place.get("formattedAddress", ""),
+            "open": place.get("businessStatus", ""),
+            "takes_reservations": place.get("reservable"),
+            "website": place.get("websiteUri", ""),
+        }
+
+    def _look_up_known_place(self, session: _Session, stop: Stop) -> dict | None:
+        """The listing the Google Maps check already matched, fetched by its id, so it isn't
+        searched for again. None if there isn't one or it can't be fetched (find_place still works)."""
+        if not stop.place_id:
+            return None
+        try:
+            place = self.details(stop.place_id, self.places_key)
+        except Exception as problem:
+            logger.warning("Couldn't get Google's details for %s: %s", stop.place, problem)
+            return None
+        if not isinstance(place, dict) or not place.get("id"):
+            return None
+        return self._remember(session, place)
+
     def _find_place(self, session: _Session, query: str) -> dict:
-        found = []
-        for place in self.search(query, self.places_key)[:3]:
-            # Google often lists websites as http://; only https pages are opened, so upgrade them.
-            if (place.get("websiteUri") or "").startswith("http://"):
-                place = {**place, "websiteUri": "https://" + place["websiteUri"][len("http://"):]}
-            session.places[place.get("id", "")] = place
-            for key in ("websiteUri", "googleMapsUri"):
-                if place.get(key):
-                    session.seen_urls.add(_clean(place[key]))
-            found.append({
-                "id": place.get("id", ""),
-                "name": (place.get("displayName") or {}).get("text", ""),
-                "address": place.get("formattedAddress", ""),
-                "open": place.get("businessStatus", ""),
-                "takes_reservations": place.get("reservable"),
-                "website": place.get("websiteUri", ""),
-            })
+        found = [self._remember(session, place) for place in self.search(query, self.places_key)[:3]]
         return {"results": found} if found else {"results": [], "note": "No match. Try a shorter name."}
 
     def _fetch_page(self, session: _Session, url: str) -> dict:
@@ -415,9 +458,10 @@ class ReservationHarness:
 
     def _run_model(self, stop: Stop, area: str) -> _Session:
         session = _Session()
+        found = self._look_up_known_place(session, stop)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _describe(stop, area)},
+            {"role": "user", "content": _describe(stop, area, found)},
         ]
         for _ in range(MAX_TURNS):
             response = self.client.chat.completions.create(
