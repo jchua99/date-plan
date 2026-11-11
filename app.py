@@ -9,9 +9,10 @@ from flask import Flask, render_template, request
 
 from itinerary import CUISINES, NO_PREFERENCE, PlanRequest
 from planner import PlanError, suggest_plan
+from travel import plan_travel
 
 
-def create_app(planner=suggest_plan) -> Flask:
+def create_app(planner=suggest_plan, travel=plan_travel) -> Flask:
     app = Flask(__name__)
 
     @app.context_processor
@@ -20,7 +21,7 @@ def create_app(planner=suggest_plan) -> Flask:
 
     @app.get("/")
     def home():
-        form = {"day": date.today().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE}
+        form = {"day": date.today().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE, "start_from": ""}
         return render_template("index.html", form=form)
 
     @app.post("/plan")
@@ -39,7 +40,13 @@ def create_app(planner=suggest_plan) -> Flask:
         except PlanError as problem:
             return render_template("index.html", form=form, error=str(problem)), 502
 
-        return render_template("index.html", form=form, itinerary=itinerary, plan_request=plan_request)
+        try:
+            trip = travel(itinerary, plan_request)
+        except Exception:
+            app.logger.exception("Travel lookup failed")
+            trip = None  # travel problems never block the plan
+
+        return render_template("index.html", form=form, itinerary=itinerary, plan_request=plan_request, travel=trip)
 
     return app
 

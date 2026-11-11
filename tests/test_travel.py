@@ -187,6 +187,15 @@ def test_map_pins_are_the_stops_that_were_found():
     assert travel.has_map
 
 
+def test_map_data_numbers_pins_by_stop_and_skips_missing_ones():
+    places = {k: v for k, v in PLACES.items() if k != "Tiong Bahru estate"}
+    request = REQUEST.model_copy(update={"start_from": "Outram Park MRT"})
+    data = plan_travel(GOOD, request, client=FakeOneMap(places=places)).map_data()
+    assert [(pin["n"], pin["name"]) for pin in data["pins"]] == [(1, "Tiong Bahru Bakery"), (3, "BooksActually")]
+    assert data["start"] == {"name": "Outram Park MRT", "lat": 1.2802, "lng": 103.8394}
+    assert len(data["paths"]) == 1  # only the start -> stop 1 leg had a route
+
+
 def test_place_not_found_only_affects_its_legs():
     places = {k: v for k, v in PLACES.items() if k != "Tiong Bahru estate"}
     travel = plan_travel(GOOD, REQUEST, client=FakeOneMap(places=places))

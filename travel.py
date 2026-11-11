@@ -202,6 +202,19 @@ class Travel:
     def has_map(self) -> bool:
         return any(self.places) or self.start is not None
 
+    def map_data(self) -> dict:
+        """What the page's map draws: numbered pins, the starting point and the route lines."""
+        legs = ([self.first_leg] if self.first_leg else []) + self.legs
+        return {
+            "pins": [
+                {"n": number, "name": place.name, "lat": place.lat, "lng": place.lng}
+                for number, place in enumerate(self.places, start=1)
+                if place
+            ],
+            "start": {"name": self.start.name, "lat": self.start.lat, "lng": self.start.lng} if self.start else None,
+            "paths": [leg.path for leg in legs if leg.path],
+        }
+
 
 def _minus(at: time, minutes: int) -> time:
     earlier = datetime.combine(date.min, at) - timedelta(minutes=minutes)

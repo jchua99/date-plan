@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Date plan</title>
+  {% if travel and travel.has_map %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  {% endif %}
   <style>
     :root { --bg: #fbf8f4; --text: #2b2420; --muted: #7a6e66; --accent: #c4553b; --card: #fff; --line: #eadfd6; }
     * { box-sizing: border-box; }
@@ -30,6 +34,16 @@
     .reserve { display: inline-block; margin-top: 8px; padding: 6px 14px; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: none; }
     .reserve:hover, .reserve:focus-visible { background: var(--accent); color: #fff; }
     .hint { margin-left: 8px; font-size: 13px; color: var(--muted); }
+    .optional { font-size: 13px; }
+    .leg { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: #f3ece5; font-size: 15px; }
+    .leg-from { font-weight: 600; margin-bottom: 2px; }
+    .leg .route { color: var(--muted); }
+    .leg a { font-size: 14px; color: var(--accent); }
+    .leg .tight { color: #8a2a1a; font-weight: 600; }
+    .leg .problem { color: var(--muted); }
+    .first-leg { margin: 0 0 16px; }
+    #map { height: 360px; margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; }
+    .pin { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 13px/1 -apple-system, system-ui, sans-serif; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
   </style>
 </head>
 <body>
@@ -47,15 +61,31 @@
         {% endfor %}
       </select>
     </label>
+    <label class="wide">Starting from <span class="optional">(optional, for travel to the first stop)</span> <input type="text" name="start_from" value="{{ form.start_from or '' }}" placeholder="e.g. Outram Park MRT"></label>
     <button type="submit">Suggest a plan</button>
   </form>
 
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
+  {% macro leg_box(leg, label="") %}
+  <div class="leg">
+    {% if label %}<div class="leg-from">{{ label }}</div>{% endif %}
+    {% if leg.minutes is not none %}
+    <div><strong>Leave by {{ leg.leave_by }}</strong> · {{ leg.minutes }} min by public transport</div>
+    <div class="route">{{ leg.route }}</div>
+    {% if leg.tight %}<div class="tight">Tight connection: you'd need to leave before this stop starts.</div>{% endif %}
+    {% else %}
+    <div class="problem">{{ leg.problem }}</div>
+    {% endif %}
+    <a href="{{ leg.google_url }}" target="_blank" rel="noopener">Open in Google Maps</a>
+  </div>
+  {% endmacro %}
+
   {% if itinerary %}
   <section class="plan">
     <h2>{{ itinerary.title }}</h2>
     <p class="when">{{ plan_request.day.strftime('%A') }} {{ plan_request.day.day }} {{ plan_request.day.strftime('%B') }} · {{ plan_request.area }}</p>
+    {% if travel and travel.first_leg %}<div class="first-leg">{{ leg_box(travel.first_leg, "From " ~ travel.first_leg.origin) }}</div>{% endif %}
     <ol>
       {% for stop in itinerary.stops %}
       <li>
@@ -68,9 +98,39 @@
         {% elif stop.maps_url %}<span class="hint">{{ 'Takes bookings, says Google. ' if stop.checked else '' }}Opens it on Google Maps</span>
         {% else %}<span class="hint">Opens a search for its booking page</span>{% endif %}
         {% endif %}
+        {% if travel and loop.index0 < travel.legs|length %}{{ leg_box(travel.legs[loop.index0]) }}{% endif %}
       </li>
       {% endfor %}
     </ol>
+    {% if travel and travel.has_map %}
+    <div id="map" aria-label="Map of the stops and the public-transport route between them"></div>
+    <script>
+      (function () {
+        const data = {{ travel.map_data()|tojson }};
+        const text = (s) => { const el = document.createElement("span"); el.textContent = s; return el; };
+        const singapore = L.latLngBounds([1.144, 103.535], [1.494, 104.502]);
+        const map = L.map("map", { maxBounds: singapore, scrollWheelZoom: false });
+        L.tileLayer("https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png", {
+          detectRetina: true, maxZoom: 19, minZoom: 11,
+          /* OneMap's terms require this attribution */
+          attribution: '<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:20px;width:20px;"/>&nbsp;<a href="https://www.onemap.gov.sg/" target="_blank" rel="noopener noreferrer">OneMap</a>&nbsp;&copy;&nbsp;contributors&nbsp;&#124;&nbsp;<a href="https://www.sla.gov.sg/" target="_blank" rel="noopener noreferrer">Singapore Land Authority</a>'
+        }).addTo(map);
+        const points = [];
+        data.paths.forEach((path) => { L.polyline(path, { color: "#c4553b", weight: 4, opacity: 0.75 }).addTo(map); points.push(...path); });
+        if (data.start) {
+          L.circleMarker([data.start.lat, data.start.lng], { radius: 8, color: "#2b2420", weight: 3, fillColor: "#fff", fillOpacity: 1 })
+            .bindTooltip(text("Start: " + data.start.name)).addTo(map);
+          points.push([data.start.lat, data.start.lng]);
+        }
+        data.pins.forEach((pin) => {
+          const icon = L.divIcon({ className: "", html: '<div class="pin">' + pin.n + "</div>", iconSize: [26, 26], iconAnchor: [13, 13] });
+          L.marker([pin.lat, pin.lng], { icon }).bindTooltip(text(pin.n + ". " + pin.name)).addTo(map);
+          points.push([pin.lat, pin.lng]);
+        });
+        map.fitBounds(points, { padding: [28, 28], maxZoom: 16 });
+      })();
+    </script>
+    {% endif %}
   </section>
   {% endif %}
 </main>

@@ -3,12 +3,22 @@ import pytest
 from app import create_app
 from planner import PlanError
 from tests.test_planner import GOOD
+from tests.test_travel import HAVELOCK_TRIP, FakeOneMap
+from travel import Travel, TravelError, plan_travel
 
 FORM = {"day": "2026-11-14", "start_time": "14:00", "area": "Tiong Bahru"}
 
 
-def client_with(planner):
-    return create_app(planner=planner).test_client()
+def no_travel(itinerary, request):
+    return Travel(places=[None] * len(itinerary.stops), legs=[])
+
+
+def client_with(planner, travel=no_travel):
+    return create_app(planner=planner, travel=travel).test_client()
+
+
+def fake_travel(itinerary, request):
+    return plan_travel(itinerary, request, client=FakeOneMap())
 
 
 def test_home_shows_the_form():
@@ -89,3 +99,59 @@ def test_reservable_stops_get_a_reserve_link_that_opens_in_a_new_tab():
     assert 'href="https://good.example/book" target="_blank" rel="noopener noreferrer"' in page
     assert "https://www.google.com/search?q=BooksActually+reservation" in page
     assert page.count("Opens a search for its booking page") == 1
+
+
+def test_form_has_optional_starting_point():
+    page = client_with(lambda r: GOOD).get("/").get_data(as_text=True)
+    assert 'name="start_from"' in page
+
+
+def test_plan_shows_travel_between_stops_and_the_map():
+    page = client_with(lambda r: GOOD, fake_travel).post("/plan", data=FORM).get_data(as_text=True)
+    assert "Leave by 14:23" in page and "37 min" in page
+    assert "Walk 9 min → MRT TE line" in page
+    assert "https://www.google.com/maps/dir/?api=1&amp;origin=Tiong+Bahru+Bakery" in page
+    assert 'id="map"' in page
+    assert "onemap.gov.sg/maps/tiles" in page
+
+
+def test_starting_point_is_passed_on_and_shown_before_stop_one():
+    asked = []
+
+    def travel(itinerary, request):
+        asked.append(request)
+        return fake_travel(itinerary, request)
+
+    form = {**FORM, "start_from": "Outram Park MRT"}
+    page = client_with(lambda r: GOOD, travel).post("/plan", data=form).get_data(as_text=True)
+    assert asked[0].start_from == "Outram Park MRT"
+    assert "From Outram Park MRT" in page and "Leave by 13:23" in page
+    assert 'value="Outram Park MRT"' in page
+
+
+def test_tight_connection_is_flagged():
+    def slow(itinerary, request):
+        return plan_travel(itinerary, request, client=FakeOneMap(trip={**HAVELOCK_TRIP, "duration": 70 * 60}))
+
+    page = client_with(lambda r: GOOD, slow).post("/plan", data=FORM).get_data(as_text=True)
+    assert "Tight connection" in page
+
+
+def test_travel_problem_shows_on_leg_with_google_link_and_no_map():
+    def broken(itinerary, request):
+        return plan_travel(itinerary, request, client=FakeOneMap(error=TravelError("Couldn't reach OneMap.")))
+
+    page = client_with(lambda r: GOOD, broken).post("/plan", data=FORM).get_data(as_text=True)
+    assert "A slow Saturday in Tiong Bahru" in page
+    assert "Couldn&#39;t reach OneMap." in page
+    assert "google.com/maps/dir" in page
+    assert 'id="map"' not in page
+
+
+def test_plan_still_shows_if_travel_crashes():
+    def crashing(itinerary, request):
+        raise RuntimeError("bug")
+
+    response = client_with(lambda r: GOOD, crashing).post("/plan", data=FORM)
+    assert response.status_code == 200
+    assert "A slow Saturday in Tiong Bahru" in response.get_data(as_text=True)
