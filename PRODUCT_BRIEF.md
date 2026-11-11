@@ -40,6 +40,14 @@ If it goes wrong: they see random date ideas that don't fit either of them, and 
 - Story 1 asks the pair for only the day, the time they're free from, and an area in Singapore. It doesn't ask about their interests yet; fitting the plan to them both is story 2.
 - A suggested plan has 3–5 stops, with times in order, over about 3–4 hours. Nothing is saved.
 - Story 2 starts with food: the pair can pick a cuisine from a dropdown (No preference, Chinese, Malay, Indian, Peranakan, Japanese, Korean, Thai, Western, Mexican, Italian). "No preference" is the default and leaves the plan as before. When they pick one, the plan must include a meal of that cuisine, and the app loosely checks this: the cuisine's name must appear in some stop's activity, place or note, or the pair are asked to try again. Activity preferences are not built yet. (Decided 2026-11-11, issue #2.)
+- **Travel by public transport (issue 3, decided 2026-11-11).** Supports story 3 (follow the plan on the day).
+  - Travel comes from OneMap, Singapore's free government map service, not Google: Google needs a billed key and we chose not to set up billing. The app signs in to OneMap with `ONEMAP_EMAIL` and `ONEMAP_PASSWORD` from the git-ignored `.env` and gets a new token itself when the old one expires (every 3 days).
+  - The lookups run in Python on the server after the plan comes back, so they can be tested with a fake OneMap.
+  - Below the plan is an interactive map (OneMap tiles) with numbered pins for each stop and the public-transport route drawn between them.
+  - Each leg between stops shows one line: leave-by time, trip time, and the route with MRT lines and bus numbers (e.g. "Leave by 14:32 · 28 min · Walk 10 min → MRT NE Farrer Park → HarbourFront → Walk 8 min"), plus an "Open in Google Maps" transit link (needs no key).
+  - "Leave by" is an estimate: the next stop's time minus the trip time. OneMap can't plan "arrive by". If leave-by is earlier than the current stop's start, the leg says the connection is tight. The model's stop times are never changed.
+  - The form gets one optional, shared "Starting from" box. If filled in, there is also a leg from there to stop 1. It doesn't change which places the model picks.
+  - Travel problems never block the plan. If a place isn't found, there's no route, the date is more than a month ahead (OneMap's limit), OneMap is down or the login isn't set up, that leg says it couldn't get the travel time and keeps its Google Maps link. The map shows the stops that were found and is hidden if none were.
 
 ## Not building
 - Anything that matches people or replaces the platform they met on.
