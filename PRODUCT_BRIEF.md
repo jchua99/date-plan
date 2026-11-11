@@ -39,6 +39,7 @@ If it goes wrong: they see random date ideas that don't fit either of them, and 
 - The GLM-5.3 Flash model (`glm-5.3-flash`), reached through OpenCode, writes the suggested itinerary. This needs an OpenCode API key. A plan that came back from any other model is rejected. (Changed from Claude, then Kimi K3, on 2026-11-11.)
 - Story 1 asks the pair for only the day, the time they're free from, and an area in Singapore. It doesn't ask about their interests yet; fitting the plan to them both is story 2.
 - A suggested plan has 3–5 stops, with times in order, over about 3–4 hours. Nothing is saved.
+- Story 2 starts with food: the pair can pick a cuisine from a dropdown (No preference, Chinese, Malay, Indian, Peranakan, Japanese, Korean, Thai, Western, Mexican, Italian). "No preference" is the default and leaves the plan as before. When they pick one, the plan must include a meal of that cuisine, and the app loosely checks this: the cuisine's name must appear in some stop's activity, place or note, or the pair are asked to try again. Activity preferences are not built yet. (Decided 2026-11-11, issue #2.)
 
 ## Not building
 - Anything that matches people or replaces the platform they met on.

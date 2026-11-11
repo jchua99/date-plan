@@ -2,7 +2,7 @@ from datetime import date, time
 
 import pytest
 
-from itinerary import Itinerary, ItineraryError, PlanRequest, Stop, check_itinerary
+from itinerary import Itinerary, ItineraryError, MissingCuisineError, PlanRequest, Stop, check_itinerary
 
 REQUEST = PlanRequest(day=date(2026, 11, 14), start_time=time(14, 0), area="Tiong Bahru")
 
@@ -47,3 +47,25 @@ def test_bad_time_text():
 def test_blank_place_is_rejected():
     with pytest.raises(ItineraryError, match="missing"):
         check_itinerary(make("14:00", "15:00", "16:00", place="  "), REQUEST)
+
+
+def test_cuisine_defaults_to_no_preference():
+    assert REQUEST.cuisine == "No preference"
+
+
+def test_unknown_cuisine_is_rejected():
+    with pytest.raises(ValueError, match="not one of the cuisines"):
+        PlanRequest(day=date(2026, 11, 14), start_time=time(14, 0), area="Tiong Bahru", cuisine="Martian")
+
+
+def test_picked_cuisine_must_appear_in_a_stop():
+    malay = REQUEST.model_copy(update={"cuisine": "Malay"})
+    with pytest.raises(MissingCuisineError, match="Malay"):
+        check_itinerary(make("14:00", "15:30", "17:00"), malay)
+
+
+def test_picked_cuisine_found_in_any_stop_ignoring_case():
+    malay = REQUEST.model_copy(update={"cuisine": "Malay"})
+    plan = make("14:00", "15:30", "17:00")
+    plan.stops[2].note = "Share nasi lemak at a MALAY stall"
+    assert check_itinerary(plan, malay) is plan
