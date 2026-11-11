@@ -54,4 +54,9 @@ To have the app check which stops really take bookings, add a Google Places key 
 2. Under **APIs & Services → Credentials**, create an API key. Restrict it to Places API (New).
 3. Paste it after `GOOGLE_PLACES_API_KEY=` in `.env` and restart the app.
 
-Each bookable stop costs about 3–4 US cents with Google, plus a few model calls, and adds a few seconds to planning.
+What Google charges per plan, at list prices before Google's monthly free usage:
+
+- **Every stop** is looked up once (a Text Search Pro request, about US$0.032). Places Google doesn't know, such as walks and streets, take two lookups (in the area, then anywhere in Singapore).
+- **Each bookable stop** is then looked up again for the reservation check (a Text Search Enterprise + Atmosphere request, about US$0.040), plus a few model calls.
+
+So a typical 4-stop plan with 2 bookable stops and 1 walk makes 5 Pro and 2 Enterprise + Atmosphere requests: about **US$0.20–0.25**. It costs more when a closed place makes the planner try again, since the new plan is looked up too (about US$0.35 with one retry). The checks add a few seconds to planning.
