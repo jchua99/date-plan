@@ -31,6 +31,7 @@ class PlanRequest(BaseModel):
     start_time: time
     area: str
     cuisine: str = NO_PREFERENCE
+    start_from: str = ""  # optional: where the pair set off from, for the first leg
 
     @field_validator("cuisine")
     @classmethod
