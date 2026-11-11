@@ -1,5 +1,6 @@
 """What a meet-up plan looks like, and the rules a good one follows."""
 
+import re
 from datetime import date, time
 from urllib.parse import urlencode
 
@@ -85,10 +86,27 @@ class MissingCuisineError(ItineraryError):
     """The pair picked a cuisine, but no stop mentions it."""
 
 
+# Hours and minutes split by ":" or ".", maybe seconds, maybe am/pm:
+# "14:30", "9:30", "9.30", "14:30:00", "7:30pm", "7:30 a.m.".
+TIME_PATTERN = re.compile(r"(\d{1,2})[:.](\d{1,2})(?::\d{2})?\s*(?:([ap])\.?m\.?)?", re.IGNORECASE)
+
+
 def parse_time(text: str) -> time:
+    """Read a stop's time. Takes the small variations the model sometimes writes.
+
+    Seconds are dropped, and "7:30pm" means 19:30. Anything else raises
+    ItineraryError.
+    """
+    found = TIME_PATTERN.fullmatch(text.strip())
     try:
-        hours, minutes = text.strip().split(":")
-        return time(int(hours), int(minutes))
+        if not found:
+            raise ValueError
+        hours, minutes, half = int(found[1]), int(found[2]), (found[3] or "").lower()
+        if half:
+            if not 1 <= hours <= 12:
+                raise ValueError
+            hours = hours % 12 + (12 if half == "p" else 0)
+        return time(hours, minutes)
     except ValueError:
         raise ItineraryError(f"'{text}' is not a time like 14:30") from None
 
@@ -98,7 +116,8 @@ def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
 
     Rules: 3-5 stops, every stop has an activity and a place, times are in
     order, nothing starts before the pair said they're free, and if they
-    picked a cuisine, some stop mentions it.
+    picked a cuisine, some stop mentions it. Each stop's time is rewritten
+    as HH:MM.
     """
     stops = itinerary.stops
     if not MIN_STOPS <= len(stops) <= MAX_STOPS:
@@ -109,6 +128,7 @@ def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
         if not stop.activity.strip() or not stop.place.strip():
             raise ItineraryError(f"Stop {number} is missing an activity or a place")
         when = parse_time(stop.time)
+        stop.time = f"{when:%H:%M}"  # store as HH:MM, so "9:00" shows as "09:00"
         if when < request.start_time:
             raise ItineraryError(f"Stop {number} starts before {request.start_time:%H:%M}")
         if previous is not None and when <= previous:

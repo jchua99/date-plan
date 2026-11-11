@@ -2,7 +2,7 @@ from datetime import date, time
 
 import pytest
 
-from itinerary import Itinerary, ItineraryError, MissingCuisineError, PlanRequest, Stop, check_itinerary
+from itinerary import Itinerary, ItineraryError, MissingCuisineError, PlanRequest, Stop, check_itinerary, parse_time
 
 REQUEST = PlanRequest(day=date(2026, 11, 14), start_time=time(14, 0), area="Tiong Bahru")
 
@@ -37,6 +37,33 @@ def test_same_time_twice_is_rejected():
 def test_nothing_before_start_time():
     with pytest.raises(ItineraryError, match="before 14:00"):
         check_itinerary(make("13:30", "15:00", "16:00"), REQUEST)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("14:30", time(14, 30)),
+    ("9:30", time(9, 30)),
+    ("9:5", time(9, 5)),
+    ("14:00:00", time(14, 0)),
+    ("9.30", time(9, 30)),
+    (" 7:30pm", time(19, 30)),
+    ("7:30 PM", time(19, 30)),
+    ("11:15 a.m.", time(11, 15)),
+    ("12:00pm", time(12, 0)),
+    ("12:30am", time(0, 30)),
+])
+def test_common_time_variants_are_read(text, expected):
+    assert parse_time(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "noon", "2pm", "25:00", "14:60", "13:00pm", "0:30am", "14:30:00:00", "14-30"])
+def test_garbage_times_are_rejected(text):
+    with pytest.raises(ItineraryError, match="not a time"):
+        parse_time(text)
+
+
+def test_times_are_stored_as_hh_mm():
+    plan = check_itinerary(make("14:00:00", "3:30pm", "17.00"), REQUEST)
+    assert [s.time for s in plan.stops] == ["14:00", "15:30", "17:00"]
 
 
 def test_bad_time_text():
