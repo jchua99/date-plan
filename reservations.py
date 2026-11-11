@@ -157,15 +157,33 @@ def place_name(place: str) -> str:
     return name or place.strip()
 
 
-def _name_words(name: str) -> set[str]:
-    """Words in a place's name, ignoring case, punctuation and plural 's'."""
-    words = re.findall(r"[a-z0-9]+", place_name(name).lower().replace("&", " and "))
+def _names_to_try(place: str) -> list[str]:
+    """The names to search for, best first.
+
+    Usually just place_name. But when cutting at the comma leaves a single
+    word, the comma may be part of the real name ("Hello, Kitty Cafe"), so the
+    whole name, without bracketed asides, is tried first.
+    """
+    name = place_name(place)
+    whole = re.split(r"[(\[]", re.sub(r"\s*[(\[][^)\]]*[)\]]", "", place), maxsplit=1)[0].strip(" -–—·,")
+    if whole and whole != name and len(name.split()) == 1:
+        return [whole, name]
+    return [name]
+
+
+def _name_words(name: str, cut: bool = True) -> set[str]:
+    """Words in a place's name, ignoring case, punctuation and plural 's'.
+    With cut=False the name is taken as it is, commas and all."""
+    words = re.findall(r"[a-z0-9]+", (place_name(name) if cut else name).lower().replace("&", " and "))
     return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words} - {"the", "and", "sg", "singapore"}
 
 
-def same_name(a: str, b: str) -> bool:
-    """True if one name's words are all in the other's: "PS.Cafe Harding" matches "PS.Cafe Harding Road"."""
-    words_a, words_b = _name_words(a), _name_words(b)
+def same_name(a: str, b: str, cut: bool = True) -> bool:
+    """True if one name's words are all in the other's: "PS.Cafe Harding" matches "PS.Cafe Harding Road".
+
+    Both names are cut down to place_name first, unless cut=False.
+    """
+    words_a, words_b = _name_words(a, cut), _name_words(b, cut)
     if not words_a or not words_b:
         return False
     shorter, longer = sorted((words_a, words_b), key=len)
@@ -189,11 +207,16 @@ def look_up_place(place: str, area: str, key: str, search=search_places) -> tupl
     first, then anywhere in Singapore: closed places drop out of searches by
     address, and the planner's address is often wrong anyway. A place is only
     called closed when it has listings and none of them is open.
+
+    A name with a comma in it may be tried whole in the area first (see
+    _names_to_try), then cut down as usual.
     """
-    name = place_name(place)
-    for query in (f"{name} {area} Singapore", f"{name} Singapore"):
+    *whole, name = _names_to_try(place)
+    searches = [(n, f"{n} {area} Singapore", False) for n in whole]
+    searches += [(name, f"{name} {area} Singapore", True), (name, f"{name} Singapore", True)]
+    for name, query, cut in searches:
         matches = [p for p in search(query, key, fields=STATUS_FIELDS, size=5)
-                   if same_name(name, (p.get("displayName") or {}).get("text", ""))]
+                   if same_name(name, (p.get("displayName") or {}).get("text", ""), cut)]
         open_now = [p for p in matches if p.get("businessStatus", OPEN) == OPEN]
         if open_now:
             return "", open_now[0]  # the first is nearest the area: that's the order Google ranks them

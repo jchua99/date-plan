@@ -78,7 +78,35 @@ def test_muchacho_is_found_closed_by_name_when_address_search_misses_it():
         "Muchacho Singapore": [listing("Muchachos", "CLOSED_PERMANENTLY", "182 Cecil St")],
     })
     assert look_up_place("Muchacho, 60 Tras Street", "Tanjong Pagar", "k", search) == ("has closed for good", None)
-    assert search.queries == ["Muchacho Tanjong Pagar Singapore", "Muchacho Singapore"]
+    # A one-word name before the comma might be cut short, so the whole name is tried first.
+    assert search.queries == [
+        "Muchacho, 60 Tras Street Tanjong Pagar Singapore",
+        "Muchacho Tanjong Pagar Singapore",
+        "Muchacho Singapore",
+    ]
+
+
+HELLO_KITTY = {**listing("Hello, Kitty Cafe", address="1 Orchard Rd"), "id": "hk"}
+
+
+def test_name_with_a_comma_is_found_by_its_whole_name():
+    search = google({
+        "Hello, Kitty Cafe Orchard Singapore": [HELLO_KITTY],
+        "Hello Orchard Singapore": [listing("Hello", address="9 Somewhere Else")],
+    })
+    assert look_up_place("Hello, Kitty Cafe", "Orchard", "k", search) == ("", HELLO_KITTY)
+    assert search.queries == ["Hello, Kitty Cafe Orchard Singapore"]
+
+
+def test_name_with_a_comma_and_bracketed_aside_is_found_by_its_whole_name():
+    search = google({"Hello, Kitty Cafe Orchard Singapore": [HELLO_KITTY]})
+    assert look_up_place("Hello, Kitty Cafe (5 min walk)", "Orchard", "k", search) == ("", HELLO_KITTY)
+
+
+def test_address_after_the_comma_is_still_cut_off_without_an_extra_search():
+    search = google({"Papi's Tacos Tanjong Pagar Singapore": [PAPIS]})
+    assert look_up_place("Papi's Tacos, 105 Amoy Street", "Tanjong Pagar", "k", search) == ("", PAPIS)
+    assert search.queries == ["Papi's Tacos Tanjong Pagar Singapore"]
 
 
 def test_open_listing_is_returned_ignoring_the_planners_address():
