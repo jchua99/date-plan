@@ -259,6 +259,43 @@ def test_closed_place_is_removed_if_it_keeps_coming_back():
     assert [s.place for s in plan.stops] == [s.place for s in GOOD.stops]
 
 
+class ThenUnreadable(ReplyQueue):
+    """Gives each reply in turn, then replies that can't be read as a plan."""
+
+    def _create(self, **kwargs):
+        if not self.replies:
+            self._reply = "Sorry, I ran out of room to answer."
+            return FakeClient._create(self, **kwargs)
+        return super()._create(**kwargs)
+
+
+def test_unreadable_replan_falls_back_to_the_last_plan_without_its_closed_place():
+    """Issue #32: a failed replan used to throw away a usable plan."""
+    client = ThenUnreadable(CLOSED_PLAN)
+    plan = plan_with(google_says(closed={"Muchacho"}), client)
+    assert [s.place for s in plan.stops] == [s.place for s in GOOD.stops]
+    assert len(client.calls) == 3  # the first plan, then both tries at a new one
+
+
+def test_rule_breaking_replan_falls_back_to_the_last_plan_without_its_closed_place():
+    too_short = GOOD.model_copy(update={"stops": GOOD.stops[:1]})
+    client = ReplyQueue(CLOSED_PLAN, too_short)
+    plan = plan_with(google_says(closed={"Muchacho"}), client)
+    assert [s.place for s in plan.stops] == [s.place for s in GOOD.stops]
+
+
+def test_failed_replan_still_gives_up_if_the_fallback_has_too_few_stops():
+    client = ThenUnreadable(GOOD)
+    with pytest.raises(PlanError, match="closed"):
+        plan_with(google_says(closed={GOOD.stops[0].place}), client)
+
+
+def test_unreadable_first_plan_is_still_an_error():
+    client = ThenUnreadable()
+    with pytest.raises(PlanError, match="Couldn't make a plan"):
+        plan_with(google_says(), client)
+
+
 def test_gives_up_if_removing_closed_places_leaves_too_few_stops():
     client = ReplyQueue(GOOD, GOOD, GOOD)
     with pytest.raises(PlanError, match="closed"):

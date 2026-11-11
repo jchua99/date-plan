@@ -117,7 +117,15 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=None, place_che
     avoid: list[str] = []
     progress(stages.WRITING)
     for _ in range(REPLANS + 1):
-        itinerary = _checked_plan(client, request, avoid)
+        try:
+            itinerary = _checked_plan(client, request, avoid)
+        except PlanError:
+            if not avoid:
+                raise  # the first plan failed, so there's nothing to fall back on
+            # Asking again went wrong, but the last plan is still usable without
+            # its closed places. `itinerary`, `checks` and `closed` are still that plan's.
+            logger.warning("A new plan couldn't be used; taking the closed places out of the last one")
+            break
         if place_checker is None:
             return _finish(itinerary, request, client, link_checker, progress)
         progress(stages.CHECKING)
