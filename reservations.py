@@ -157,19 +157,47 @@ def place_name(place: str) -> str:
     return name or place.strip()
 
 
-def _name_words(name: str) -> set[str]:
-    """Words in a place's name, ignoring case, punctuation and plural 's'."""
-    words = re.findall(r"[a-z0-9]+", place_name(name).lower().replace("&", " and "))
-    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words} - {"the", "and", "sg", "singapore"}
+FILLER_WORDS = {"the", "and", "sg", "singapore"}
+# Words that make a longer name a different kind of place: "Kampong Glam" is a
+# neighbourhood, "Kampong Glam Cafe" is a cafe there.
+KIND_WORDS = {
+    "station", "mrt", "lrt", "interchange", "terminal", "cafe", "café", "coffee", "bar", "pub", "restaurant",
+    "bistro", "bakery", "hotel", "hostel", "mall", "park", "museum", "gallery", "club",
+}
+
+
+def _name_words(name: str) -> list[str]:
+    """Words in a place's name, in order, ignoring case, punctuation and plural 's'.
+
+    Letters from any script count, so Chinese or Tamil names have words too.
+    """
+    words = re.findall(r"\w+", place_name(name).casefold().replace("&", " and "))
+    return [w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words]
 
 
 def same_name(a: str, b: str) -> bool:
-    """True if one name's words are all in the other's: "PS.Cafe Harding" matches "PS.Cafe Harding Road"."""
+    """True if two names are for the same place.
+
+    - The same words (ignoring case, punctuation and plural 's') always match,
+      in any script: "Bistro du Vin" and "Bistro Du Vin", "The Sg" and "The Sg".
+    - Otherwise, leaving out "the", "and" and "Singapore", the shorter name must
+      have at least two words, all of them in the longer name, and the longer
+      name's extra words mustn't name a kind of place (KIND_WORDS). So "PS.Cafe
+      Harding" matches "PS.Cafe Harding Road", but "Kampong Glam" doesn't match
+      "Kampong Glam Cafe" and "Haw Par Villa" doesn't match "Haw Par Villa MRT Station".
+    """
     words_a, words_b = _name_words(a), _name_words(b)
     if not words_a or not words_b:
         return False
-    shorter, longer = sorted((words_a, words_b), key=len)
-    return shorter <= longer
+    if words_a == words_b:
+        return True
+    set_a, set_b = set(words_a) - FILLER_WORDS, set(words_b) - FILLER_WORDS
+    if not set_a or not set_b:
+        return False
+    if set_a == set_b:
+        return True
+    shorter, longer = sorted((set_a, set_b), key=len)
+    return len(shorter) >= 2 and shorter <= longer and not (longer - shorter) & KIND_WORDS
 
 
 @dataclass

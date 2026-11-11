@@ -55,6 +55,28 @@ def test_different_names_do_not_match(a, b):
 
 
 @pytest.mark.parametrize(
+    "a, b",
+    [
+        ("Kampong Glam", "Kampong Glam Cafe"),
+        ("Haw Par Villa", "Haw Par Villa MRT Station"),
+        ("Atlas", "Atlas Coffee House"),  # one word is too little to go on
+    ],
+)
+def test_a_place_inside_a_longer_name_is_a_different_place(a, b):
+    assert not same_name(a, b)
+
+
+@pytest.mark.parametrize("name", ["The Sg", "文华酒店", "Komala Vilas"])
+def test_identical_names_always_match(name):
+    assert same_name(name, name)
+
+
+def test_walk_does_not_take_on_a_cafe_with_its_name():
+    search = google({"Kampong Glam Bugis Singapore": [listing("Kampong Glam Cafe", address="17 Bussorah St")]})
+    assert look_up_place("Kampong Glam", "Bugis", "k", search) == ("", None)
+
+
+@pytest.mark.parametrize(
     "written, name",
     [
         ("Papi's Tacos, 105 Amoy Street", "Papi's Tacos"),
