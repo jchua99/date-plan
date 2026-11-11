@@ -203,16 +203,25 @@ def look_up_place(place: str, area: str, key: str, search=search_places) -> tupl
     return "", None
 
 
-def check_places(itinerary: Itinerary, area: str, key: str, search=search_places) -> list[PlaceCheck]:
-    """Look every stop up on Google Maps, in parallel. A failed lookup counts as not found."""
+def check_places(itinerary: Itinerary, area: str, key: str, search=search_places, cache: dict | None = None) -> list[PlaceCheck]:
+    """Look every stop up on Google Maps, in parallel. A failed lookup counts as not found.
+
+    Pass the same `cache` dict for every check of one plan, so that when the
+    plan is asked for again, stops that didn't change aren't searched again.
+    Failed lookups aren't cached, so they're tried again next time.
+    """
+    cache = {} if cache is None else cache
 
     def check(index: int) -> PlaceCheck:
         place = itinerary.stops[index].place
-        try:
-            closed, listing = look_up_place(place, area, key, search)
-        except Exception as problem:
-            logger.warning("Couldn't look up %s on Google: %s", place, problem)
-            return PlaceCheck(index, place)
+        seen = (" ".join(place_name(place).casefold().split()), " ".join(area.casefold().split()))
+        if seen not in cache:
+            try:
+                cache[seen] = look_up_place(place, area, key, search)
+            except Exception as problem:
+                logger.warning("Couldn't look up %s on Google: %s", place, problem)
+                return PlaceCheck(index, place)
+        closed, listing = cache[seen]
         return PlaceCheck(index, place, closed, listing)
 
     with ThreadPoolExecutor(max_workers=len(itinerary.stops) or 1) as pool:

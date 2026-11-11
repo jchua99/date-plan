@@ -303,7 +303,7 @@ def test_places_are_checked_on_google_when_key_is_set(monkeypatch):
 
     seen = []
 
-    def fake_check(itinerary, area, key):
+    def fake_check(itinerary, area, key, cache=None):
         seen.append((area, key))
         return [PlaceCheck(i, s.place) for i, s in enumerate(itinerary.stops)]
 
@@ -315,3 +315,29 @@ def test_places_are_checked_on_google_when_key_is_set(monkeypatch):
 
 def test_without_google_key_places_are_left_as_planned():
     assert suggest_plan(REQUEST, client=FakeClient(), link_checker=lambda it: it) == GOOD
+
+
+def test_replan_only_searches_google_for_the_stop_that_changed(monkeypatch):
+    import planner
+    from reservations import check_places
+
+    queries = []
+
+    def search(query, key, fields=None, size=3):
+        queries.append(query)
+        if query.startswith("Muchacho"):
+            return [{"id": "m", "displayName": {"text": "Muchachos"}, "businessStatus": "CLOSED_PERMANENTLY"}]
+        if query.startswith("Hamamoto"):
+            return [{"id": "h", "displayName": {"text": "Hamamoto"}, "businessStatus": "OPERATIONAL"}]
+        return []
+
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "k")
+    monkeypatch.setattr(planner, "check_places", lambda it, area, key, cache=None: check_places(it, area, key, search, cache))
+    swapped = [s.model_copy(update={"place": "Hamamoto"}) if s.place.startswith("Muchacho") else s for s in CLOSED_PLAN.stops]
+    client = ReplyQueue(CLOSED_PLAN, CLOSED_PLAN.model_copy(update={"stops": swapped}))
+    plan = suggest_plan(REQUEST, client=client, link_checker=lambda it: it)
+
+    assert plan.stops[2].place == "Hamamoto"
+    first_plan = 2 * 3 + 1  # three stops Google doesn't know (two searches each), and Muchacho
+    assert len(queries) == first_plan + 1
+    assert queries[first_plan:] == ["Hamamoto Tiong Bahru Singapore"]

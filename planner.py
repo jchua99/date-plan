@@ -110,7 +110,9 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=None, place_che
     if place_checker is None:
         google_key = places_key()
         if google_key:
-            place_checker = lambda it, area: check_places(it, area, google_key)  # noqa: E731
+            # One cache per plan: a replan only searches Google for the stops that changed.
+            lookups: dict = {}
+            place_checker = lambda it, area: check_places(it, area, google_key, cache=lookups)  # noqa: E731
 
     # The model sometimes suggests places that have since closed. Ask again,
     # naming them, and as a last resort take them out of the plan.

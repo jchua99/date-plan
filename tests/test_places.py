@@ -106,6 +106,31 @@ def test_closed_neighbour_with_different_name_is_ignored():
     assert look_up_place("Hamamoto", "Tanjong Pagar", "k", search)[1]["displayName"]["text"] == "Hamamoto"
 
 
+def test_check_places_does_not_search_again_for_stops_already_looked_up():
+    search = google({"Muchacho Tanjong Pagar Singapore": [listing("Muchachos", "CLOSED_PERMANENTLY")]})
+    cache = {}
+    check_places(Itinerary(title="T", stops=[stop("Duxton Hill"), stop("Muchacho")]), "Tanjong Pagar", "k", search, cache)
+    first = len(search.queries)
+    replanned = Itinerary(title="T", stops=[stop("Duxton  hill, 1 Duxton Rd"), stop("Hamamoto")])
+    checks = check_places(replanned, "Tanjong Pagar", "k", search, cache)
+    assert [q.split()[0] for q in search.queries[first:]] == ["Hamamoto", "Hamamoto"]
+    assert [c.place for c in checks] == ["Duxton  hill, 1 Duxton Rd", "Hamamoto"]
+
+
+def test_failed_lookups_are_not_cached():
+    calls = []
+
+    def search(query, key, fields=None, size=3):
+        calls.append(query)
+        raise OSError("timeout")
+
+    cache = {}
+    plan = Itinerary(title="T", stops=[stop("Duxton Hill")])
+    check_places(plan, "Tanjong Pagar", "k", search, cache)
+    check_places(plan, "Tanjong Pagar", "k", search, cache)
+    assert len(calls) == 2 and cache == {}
+
+
 def test_check_places_checks_every_stop_and_survives_lookup_errors():
     stops = [stop("Duxton Hill"), stop("Muchacho, 60 Tras Street"), stop("Broken Lookup Bar")]
 
