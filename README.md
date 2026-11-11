@@ -34,6 +34,12 @@ Open http://127.0.0.1:5001, then fill in the day, start time and area (and, if y
 
 The tests use a fake model and a fake OneMap, so they're free and work offline.
 
+To also check that OpenCode still returns the plan as structured output, run the one live test. It uses your `OPENCODE_API_KEY`, takes about 30 seconds and costs a fraction of a cent:
+
+```bash
+.venv/bin/pytest --live tests/test_live.py
+```
+
 ## Files
 
 - `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
