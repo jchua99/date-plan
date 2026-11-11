@@ -106,6 +106,51 @@ def test_closed_neighbour_with_different_name_is_ignored():
     assert look_up_place("Hamamoto", "Tanjong Pagar", "k", search)[1]["displayName"]["text"] == "Hamamoto"
 
 
+# --- Ruling out far-away branches ---
+
+TIONG_BAHRU = {"latitude": 1.2847, "longitude": 103.8300}
+
+
+def at(place, lat, lng):
+    return {**place, "location": {"latitude": lat, "longitude": lng}}
+
+
+JURONG_BRANCH = at(listing("Tiong Bahru Bakery", address="1 Jurong West Central 2, Singapore 648886"), 1.3397, 103.7067)
+LOCAL_BRANCH = at(listing("Tiong Bahru Bakery", address="56 Eng Hoon St, Singapore 160056"), 1.2846, 103.8326)
+
+
+def test_far_away_branch_from_the_island_wide_search_is_not_used():
+    search = google({"Tiong Bahru Bakery Singapore": [JURONG_BRANCH]})
+    assert look_up_place("Tiong Bahru Bakery", "Tiong Bahru", "k", search, near=TIONG_BAHRU) == ("", None)
+
+
+def test_far_away_closed_branch_does_not_make_the_stop_closed():
+    search = google({"Tiong Bahru Bakery Singapore": [{**JURONG_BRANCH, "businessStatus": "CLOSED_PERMANENTLY"}]})
+    assert look_up_place("Tiong Bahru Bakery", "Tiong Bahru", "k", search, near=TIONG_BAHRU) == ("", None)
+
+
+def test_nearest_branch_from_the_island_wide_search_is_picked():
+    search = google({"Tiong Bahru Bakery Singapore": [JURONG_BRANCH, LOCAL_BRANCH]})
+    assert look_up_place("Tiong Bahru Bakery", "Tiong Bahru", "k", search, near=TIONG_BAHRU) == ("", LOCAL_BRANCH)
+
+
+def test_without_an_area_location_the_island_wide_match_is_kept():
+    search = google({"Tiong Bahru Bakery Singapore": [JURONG_BRANCH]})
+    assert look_up_place("Tiong Bahru Bakery", "Tiong Bahru", "k", search) == ("", JURONG_BRANCH)
+
+
+def test_check_places_locates_the_area_once_and_rules_out_far_branches():
+    search = google({
+        "Tiong Bahru Singapore": [{**listing("Tiong Bahru"), "location": TIONG_BAHRU}],
+        "Tiong Bahru Bakery Singapore": [JURONG_BRANCH],
+        "Tiong Bahru Market Singapore": [at(listing("Tiong Bahru Market"), 1.2850, 103.8325)],
+    })
+    plan = Itinerary(title="T", stops=[stop("Tiong Bahru Bakery"), stop("Tiong Bahru Market")])
+    checks = check_places(plan, "Tiong Bahru", "k", search)
+    assert [bool(c.listing) for c in checks] == [False, True]
+    assert search.queries.count("Tiong Bahru Singapore") == 1
+
+
 def test_check_places_checks_every_stop_and_survives_lookup_errors():
     stops = [stop("Duxton Hill"), stop("Muchacho, 60 Tras Street"), stop("Broken Lookup Bar")]
 

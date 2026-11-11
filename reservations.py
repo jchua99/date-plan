@@ -23,6 +23,7 @@ as the planner made it, so a plan is never lost because the check failed.
 
 import json
 import logging
+import math
 import os
 import re
 import urllib.error
@@ -145,7 +146,13 @@ def search_places(query: str, key: str, fields: str = PLACES_FIELDS, size: int =
 # --- Checking every place against Google Maps ---
 
 # Only what this check needs, which Google bills at a lower rate than `reservable`.
-STATUS_FIELDS = "places.id,places.displayName,places.formattedAddress,places.businessStatus,places.googleMapsUri"
+STATUS_FIELDS = ",".join(
+    f"places.{name}" for name in ("id", "displayName", "formattedAddress", "businessStatus", "googleMapsUri", "location")
+)
+# A listing found only by the Singapore-wide search must be within this many km
+# of the plan's area. Further away, it's most likely another branch of the
+# place, and the page would show (and route to) that branch instead.
+AREA_KM = 3.0
 OPEN = "OPERATIONAL"
 CLOSED = {"CLOSED_PERMANENTLY": "has closed for good", "CLOSED_TEMPORARILY": "is closed for now"}
 
@@ -182,18 +189,50 @@ class PlaceCheck:
     listing: dict | None = None  # the open Google listing with the same name, if there is one
 
 
-def look_up_place(place: str, area: str, key: str, search=search_places) -> tuple[str, dict | None]:
+def distance_km(a: dict, b: dict) -> float:
+    """Straight-line distance between two Google locations ({"latitude": ..., "longitude": ...})."""
+    lat1, lat2 = math.radians(a["latitude"]), math.radians(b["latitude"])
+    dlat, dlng = lat2 - lat1, math.radians(b["longitude"] - a["longitude"])
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+def _location(listing: dict) -> dict | None:
+    location = listing.get("location") or {}
+    return location if "latitude" in location and "longitude" in location else None
+
+
+def locate_area(area: str, key: str, search=search_places) -> dict | None:
+    """Where the plan's area is, as a Google location, or None if Google can't place it."""
+    try:
+        results = search(f"{area} Singapore", key, fields=STATUS_FIELDS, size=1)
+    except Exception as problem:
+        logger.warning("Couldn't locate %s on Google: %s", area, problem)
+        return None
+    return _location(results[0]) if results else None
+
+
+def look_up_place(place: str, area: str, key: str, search=search_places, near: dict | None = None) -> tuple[str, dict | None]:
     """Return (why it's closed or "", the matching open listing or None).
 
     Only listings with the same name count. The name is searched in the area
     first, then anywhere in Singapore: closed places drop out of searches by
     address, and the planner's address is often wrong anyway. A place is only
     called closed when it has listings and none of them is open.
+
+    `near` is where the area is (see locate_area). When it's known, listings
+    from the Singapore-wide search more than AREA_KM from it are ignored, since
+    they're most likely another branch, and the nearest is preferred. Without
+    it, or for a listing with no location, nothing is ruled out.
     """
     name = place_name(place)
-    for query in (f"{name} {area} Singapore", f"{name} Singapore"):
+    island_wide = f"{name} Singapore"
+    for query in (f"{name} {area} Singapore", island_wide):
         matches = [p for p in search(query, key, fields=STATUS_FIELDS, size=5)
                    if same_name(name, (p.get("displayName") or {}).get("text", ""))]
+        if near and query == island_wide:
+            away = [(distance_km(near, _location(p)) if _location(p) else 0.0, p) for p in matches]
+            matches = [p for km, p in sorted(away, key=lambda pair: pair[0]) if km <= AREA_KM]
         open_now = [p for p in matches if p.get("businessStatus", OPEN) == OPEN]
         if open_now:
             return "", open_now[0]  # the first is nearest the area: that's the order Google ranks them
@@ -204,12 +243,17 @@ def look_up_place(place: str, area: str, key: str, search=search_places) -> tupl
 
 
 def check_places(itinerary: Itinerary, area: str, key: str, search=search_places) -> list[PlaceCheck]:
-    """Look every stop up on Google Maps, in parallel. A failed lookup counts as not found."""
+    """Look every stop up on Google Maps, in parallel. A failed lookup counts as not found.
+
+    The area itself is looked up once first (one more search), so that
+    far-away branches of a place can be ruled out.
+    """
+    near = locate_area(area, key, search)
 
     def check(index: int) -> PlaceCheck:
         place = itinerary.stops[index].place
         try:
-            closed, listing = look_up_place(place, area, key, search)
+            closed, listing = look_up_place(place, area, key, search, near)
         except Exception as problem:
             logger.warning("Couldn't look up %s on Google: %s", place, problem)
             return PlaceCheck(index, place)
