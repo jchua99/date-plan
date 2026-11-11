@@ -19,6 +19,7 @@ from travel import (
     google_maps_link,
     leave_by,
     plan_travel,
+    search_variants,
 )
 
 # A real OneMap reply (trimmed): walk to Havelock, TE line to Gardens by the Bay, walk.
@@ -282,6 +283,25 @@ def test_find_tries_the_name_before_the_comma(monkeypatch):
     monkeypatch.setattr("travel.urlopen", urlopen)
     assert OneMap("t").find("Tiong Bahru Market, Seng Poh Road") == Place("Tiong Bahru Market, Seng Poh Road", 1.3, 103.8)
     assert seen == ["Tiong Bahru Market, Seng Poh Road", "Tiong Bahru Market"]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Outram Park MRT", ["Outram Park MRT"]),
+        # Real names the model wrote that OneMap couldn't find as-is:
+        ("BooksActually, 115 Yong Siak Street", ["BooksActually, 115 Yong Siak Street", "BooksActually", "115 Yong Siak Street", "Yong Siak Street"]),
+        ("Tiong Bahru estate & Seng Poh Garden", ["Tiong Bahru estate & Seng Poh Garden", "Tiong Bahru estate", "Seng Poh Garden"]),
+        (
+            "Tiong Bahru Market & Food Centre, 30 Seng Poh Road",
+            ["Tiong Bahru Market & Food Centre, 30 Seng Poh Road", "Tiong Bahru Market & Food Centre", "30 Seng Poh Road",
+             "Tiong Bahru Market", "Food Centre", "Seng Poh Road"],
+        ),
+        ("Gardens by the Bay and Marina Barrage", ["Gardens by the Bay and Marina Barrage", "Gardens by the Bay", "Marina Barrage"]),
+    ],
+)
+def test_search_variants_go_from_exact_to_looser(text, expected):
+    assert search_variants(text) == expected
 
 
 def test_find_nothing(monkeypatch):

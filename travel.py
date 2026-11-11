@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from urllib.error import HTTPError, URLError
@@ -104,6 +105,24 @@ class Place:
     lng: float
 
 
+def search_variants(text: str) -> list[str]:
+    """Names to try in OneMap, from exact to looser.
+
+    The model writes things like "BooksActually, 115 Yong Siak Street" or
+    "Tiong Bahru estate & Seng Poh Garden", which OneMap can't find whole.
+    So also try each comma part, each half of "A & B" / "A and B", and
+    addresses without the house number.
+    """
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    pieces = [piece.strip() for part in parts for piece in re.split(r"\s+(?:&|and)\s+", part) if piece.strip()]
+    streets = [re.sub(r"^\d+[A-Za-z]?\s+", "", piece) for piece in pieces]
+    variants = []
+    for name in [text.strip(), *parts, *pieces, *streets]:
+        if name and name not in variants:
+            variants.append(name)
+    return variants
+
+
 class OneMap:
     """A small client for OneMap's search and public-transport routing APIs."""
 
@@ -127,11 +146,8 @@ class OneMap:
             raise TravelError(NO_ROUTE) from None
 
     def find(self, text: str) -> Place | None:
-        """Look a place up by name. Tries the part before any comma if the full name isn't found."""
-        tries = [text]
-        if "," in text:
-            tries.append(text.split(",")[0].strip())
-        for search in tries:
+        """Look a place up by name, trying looser versions of it if the full name isn't found."""
+        for search in search_variants(text):
             try:
                 reply = self._get(
                     "/api/common/elastic/search",
