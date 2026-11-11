@@ -110,17 +110,25 @@ def search_variants(text: str) -> list[str]:
 
     The model writes things like "BooksActually, 115 Yong Siak Street" or
     "Tiong Bahru estate & Seng Poh Garden", which OneMap can't find whole.
-    So also try each comma part, each half of "A & B" / "A and B", and
+    So also try each comma part, each half of "A & B" / "A and B" / "A to B", and
     addresses without the house number.
     """
     parts = [part.strip() for part in text.split(",") if part.strip()]
-    pieces = [piece.strip() for part in parts for piece in re.split(r"\s+(?:&|and)\s+", part) if piece.strip()]
+    pieces = [piece.strip() for part in parts for piece in re.split(r"\s+(?:&|and|to)\s+", part) if piece.strip()]
     streets = [re.sub(r"^\d+[A-Za-z]?\s+", "", piece) for piece in pieces]
     variants = []
     for name in [text.strip(), *parts, *pieces, *streets]:
         if name and name not in variants:
             variants.append(name)
     return variants
+
+
+NEARBY_KM = 1.5  # a match further than this from the area is probably another branch
+
+
+def km_between(a: Place, b: Place) -> float:
+    """Rough distance; fine at Singapore's latitude."""
+    return ((a.lat - b.lat) ** 2 + (a.lng - b.lng) ** 2) ** 0.5 * 111
 
 
 class OneMap:
@@ -149,7 +157,9 @@ class OneMap:
         """Look a place up by name, trying looser versions of it if the full name isn't found.
 
         Chains like Tiong Bahru Bakery have several branches, so pick the result nearest `near`.
+        If even that is far away, try the looser names (e.g. just the street) before settling for it.
         """
+        fallback = None
         for search in search_variants(text):
             try:
                 reply = self._get(
@@ -160,11 +170,15 @@ class OneMap:
                 return None
             results = reply.get("results") or []
             found = [Place(text, float(r["LATITUDE"]), float(r["LONGITUDE"])) for r in results]
-            if found:
-                if near is None:
-                    return found[0]
-                return min(found, key=lambda p: (p.lat - near.lat) ** 2 + (p.lng - near.lng) ** 2)
-        return None
+            if not found:
+                continue
+            if near is None:
+                return found[0]
+            best = min(found, key=lambda place: km_between(place, near))
+            if km_between(best, near) <= NEARBY_KM:
+                return best
+            fallback = fallback or best
+        return fallback
 
     def route(self, start: Place, end: Place, day: date, at: time) -> dict | None:
         """The quickest public-transport trip leaving at `at`, or None if there isn't one."""

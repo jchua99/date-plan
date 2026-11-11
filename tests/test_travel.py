@@ -292,6 +292,30 @@ def test_find_picks_the_branch_nearest_the_area(monkeypatch):
     assert OneMap("t").find("Tiong Bahru Bakery") == Place("Tiong Bahru Bakery", 1.3106, 103.7955)
 
 
+def test_find_skips_a_far_branch_if_a_looser_name_is_nearby(monkeypatch):
+    # Real case: OneMap doesn't list the Tiong Bahru branch; its nearest is on Orchard Road (~2 km).
+    replies = {
+        "Tiong Bahru Bakery, Eng Hoon Street": [],
+        "Tiong Bahru Bakery": [{"LATITUDE": "1.30143", "LONGITUDE": "103.8399"}],  # Orchard Road
+        "Eng Hoon Street": [{"LATITUDE": "1.2845", "LONGITUDE": "103.8318"}],  # Tiong Bahru
+    }
+
+    def urlopen(request, timeout):
+        search = parse_qs(urlparse(request.full_url).query)["searchVal"][0]
+        return FakeResponse({"results": replies[search]})
+
+    monkeypatch.setattr("travel.urlopen", urlopen)
+    near = Place("Tiong Bahru", 1.28323, 103.8336)
+    place = OneMap("t").find("Tiong Bahru Bakery, Eng Hoon Street", near=near)
+    assert (place.lat, place.lng) == (1.2845, 103.8318)
+
+
+def test_find_falls_back_to_a_far_match_if_nothing_is_nearby(monkeypatch):
+    fake_urlopen(monkeypatch, {"results": [{"LATITUDE": "1.30143", "LONGITUDE": "103.8399"}]})
+    place = OneMap("t").find("Tiong Bahru Bakery", near=Place("Tiong Bahru", 1.28323, 103.8336))
+    assert (place.lat, place.lng) == (1.30143, 103.8399)
+
+
 def test_find_tries_the_name_before_the_comma(monkeypatch):
     replies = iter([{"found": 0, "results": []}, {"found": 1, "results": [{"LATITUDE": "1.3", "LONGITUDE": "103.8"}]}])
     seen = []
@@ -318,6 +342,7 @@ def test_find_tries_the_name_before_the_comma(monkeypatch):
              "Tiong Bahru Market", "Food Centre", "Seng Poh Road"],
         ),
         ("Gardens by the Bay and Marina Barrage", ["Gardens by the Bay and Marina Barrage", "Gardens by the Bay", "Marina Barrage"]),
+        ("Seng Poh Lane to Yong Siak Street", ["Seng Poh Lane to Yong Siak Street", "Seng Poh Lane", "Yong Siak Street"]),
     ],
 )
 def test_search_variants_go_from_exact_to_looser(text, expected):
