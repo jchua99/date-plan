@@ -36,7 +36,7 @@ The tests use a fake model and a fake OneMap, so they're free and work offline.
 
 ## Files
 
-- `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
+- `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order, starting when the pair are free and lasting roughly 3–4 hours).
 - `planner.py` asks GLM-5.3 Flash for a plan, rejects replies from any other model, and turns any failure into a friendly message.
 - `links.py` checks the reservation links the model suggests. Stops the model thinks take bookings get a **Reserve** button that opens the place's booking page in a new tab. Without a Google key, the model's links are guesses: any that don't load are dropped, and the button searches for the place's booking page instead.
 - `reservations.py` holds the Google checks, used when `GOOGLE_PLACES_API_KEY` is set.

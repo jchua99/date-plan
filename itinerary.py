@@ -8,6 +8,15 @@ from pydantic import BaseModel, field_validator
 MIN_STOPS = 3
 MAX_STOPS = 5
 
+# The first stop starts when the pair said they're free. Allow a little
+# slack, e.g. a café that opens at 14:15 for a pair free from 14:00.
+START_LEEWAY_MINUTES = 15
+# The plan should last about 3-4 hours. We only know when each stop starts,
+# not when the last one ends, so measure from the first stop's start to the
+# last stop's start, and only reject spans that are clearly wrong.
+SHORTEST_PLAN_MINUTES = 90
+LONGEST_PLAN_MINUTES = 5 * 60
+
 NO_PREFERENCE = "No preference"
 CUISINES = (
     NO_PREFERENCE,
@@ -93,12 +102,19 @@ def parse_time(text: str) -> time:
         raise ItineraryError(f"'{text}' is not a time like 14:30") from None
 
 
+def _minutes(at: time) -> int:
+    """Minutes since midnight."""
+    return at.hour * 60 + at.minute
+
+
 def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
     """Return the itinerary if it follows the rules, otherwise raise ItineraryError.
 
     Rules: 3-5 stops, every stop has an activity and a place, times are in
-    order, nothing starts before the pair said they're free, and if they
-    picked a cuisine, some stop mentions it.
+    order, nothing starts before the pair said they're free, the first stop
+    starts at that time (give or take START_LEEWAY_MINUTES), the plan lasts
+    roughly 3-4 hours (see SHORTEST_PLAN_MINUTES and LONGEST_PLAN_MINUTES),
+    and if they picked a cuisine, some stop mentions it.
     """
     stops = itinerary.stops
     if not MIN_STOPS <= len(stops) <= MAX_STOPS:
@@ -114,6 +130,15 @@ def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
         if previous is not None and when <= previous:
             raise ItineraryError(f"Stop {number} isn't later than the stop before it")
         previous = when
+
+    first = parse_time(stops[0].time)
+    if _minutes(first) - _minutes(request.start_time) > START_LEEWAY_MINUTES:
+        raise ItineraryError(f"Stop 1 starts at {first:%H:%M}, not at {request.start_time:%H:%M}")
+    span = _minutes(previous) - _minutes(first)
+    if span < SHORTEST_PLAN_MINUTES:
+        raise ItineraryError(f"The plan only lasts {span} minutes")
+    if span > LONGEST_PLAN_MINUTES:
+        raise ItineraryError(f"The plan lasts {span} minutes, far more than 3-4 hours")
 
     if request.cuisine != NO_PREFERENCE and not mentions_cuisine(itinerary, request.cuisine):
         raise MissingCuisineError(f"No stop mentions {request.cuisine} food")

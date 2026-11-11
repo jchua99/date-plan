@@ -265,6 +265,17 @@ def test_gives_up_if_removing_closed_places_leaves_too_few_stops():
         plan_with(google_says(closed={s.place for s in GOOD.stops}), client)
 
 
+def test_gives_up_if_removing_a_closed_first_stop_starts_the_plan_late():
+    first_closed = Itinerary(
+        title="T",
+        stops=[Stop(time="14:00", activity="Lunch", place="Muchacho, 60 Tras Street", note="n"),
+               *[s.model_copy(update={"time": t}) for s, t in zip(GOOD.stops, ["15:00", "16:00", "17:30"])]],
+    )
+    client = ReplyQueue(first_closed, first_closed, first_closed)
+    with pytest.raises(PlanError, match="closed"):
+        plan_with(google_says(closed={"Muchacho"}), client)
+
+
 def test_open_plan_is_not_asked_again():
     client = FakeClient()
     plan_with(google_says(), client)

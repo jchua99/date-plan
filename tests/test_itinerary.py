@@ -39,6 +39,32 @@ def test_nothing_before_start_time():
         check_itinerary(make("13:30", "15:00", "16:00"), REQUEST)
 
 
+def test_first_stop_may_start_a_little_late():
+    plan = make("14:15", "15:30", "17:00")
+    assert check_itinerary(plan, REQUEST) is plan
+
+
+def test_first_stop_must_start_at_the_start_time():
+    with pytest.raises(ItineraryError, match="Stop 1 starts at 18:00, not at 14:00"):
+        check_itinerary(make("18:00", "19:00", "20:00"), REQUEST)
+
+
+def test_plan_that_is_far_too_short_is_rejected():
+    with pytest.raises(ItineraryError, match="only lasts 2 minutes"):
+        check_itinerary(make("14:00", "14:01", "14:02"), REQUEST)
+
+
+def test_plan_that_is_far_too_long_is_rejected():
+    with pytest.raises(ItineraryError, match="far more than 3-4 hours"):
+        check_itinerary(make("14:00", "17:00", "19:30"), REQUEST)
+
+
+@pytest.mark.parametrize("last", ["15:30", "19:00"])
+def test_plan_length_has_some_tolerance(last):
+    plan = make("14:00", "15:00", last)
+    assert check_itinerary(plan, REQUEST) is plan
+
+
 def test_bad_time_text():
     with pytest.raises(ItineraryError, match="not a time"):
         check_itinerary(make("2pm", "15:00", "16:00"), REQUEST)
