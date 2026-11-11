@@ -1,5 +1,6 @@
 """Issue #15: the page says what's happening while a plan is made."""
 
+import threading
 import time
 
 import pytest
@@ -114,6 +115,76 @@ def test_crashing_job_ends_with_a_friendly_error():
     job = Jobs(run_in_background=False).start(boom, fallback_page={"form": {"area": "x"}})
     assert job.state == DONE and job.status_code == 500
     assert job.page["form"] == {"area": "x"} and "Something went wrong" in job.page["error"]
+
+
+@pytest.mark.parametrize("stop", [KeyboardInterrupt, SystemExit])
+def test_interrupted_job_still_ends_then_lets_the_interrupt_through(stop):
+    """Issue #31: a BaseException used to leave the job running forever."""
+    jobs = Jobs(run_in_background=False)
+
+    def interrupted(report):
+        raise stop()
+
+    with pytest.raises(stop):
+        jobs.start(interrupted, fallback_page={"form": {"area": "x"}})
+    [job] = jobs._jobs.values()
+    assert job.state == DONE and job.status_code == 500 and "Something went wrong" in job.page["error"]
+
+
+def slow_app(time_limit):
+    """An app whose plans block until `release` is set."""
+    release = threading.Event()
+
+    def planner(request, progress):
+        progress(stages.WRITING)
+        release.wait(5)
+        return GOOD
+
+    jobs = Jobs(time_limit=time_limit)
+    return create_app(planner=planner, travel=lambda it, req: None, jobs=jobs).test_client(), release
+
+
+def test_plan_past_the_time_limit_ends_with_a_friendly_error():
+    client, release = slow_app(time_limit=0.1)
+    try:
+        urls = client.post("/plan/start", data=FORM).get_json()
+        assert client.get(urls["status_url"]).get_json()["done"] is False
+        time.sleep(0.2)
+        status = client.get(urls["status_url"])
+        assert status.status_code == 200 and status.get_json() == {"done": True, "message": "This is taking too long. Please try again."}
+        page = client.get(urls["result_url"])
+        assert page.status_code == 504 and "This is taking too long" in page.get_data(as_text=True)
+    finally:
+        release.set()
+
+
+def test_late_result_after_the_time_limit_is_ignored():
+    jobs = Jobs(time_limit=0.1)
+    release = threading.Event()
+    job = jobs.start(lambda report: (release.wait(5), report("late step"), ({"form": {}, "late": True}, 200))[2], fallback_page={"form": {}})
+    time.sleep(0.2)
+    assert jobs.get(job.id).status_code == 504
+    release.set()
+    for _ in range(100):
+        time.sleep(0.01)
+    assert job.status_code == 504 and "late" not in job.page and job.message == "This is taking too long. Please try again."
+
+
+def test_plan_within_the_time_limit_is_untouched():
+    client, release = slow_app(time_limit=60)
+    release.set()
+    urls = client.post("/plan/start", data=FORM).get_json()
+    for _ in range(200):
+        if client.get(urls["status_url"]).get_json()["done"]:
+            break
+        time.sleep(0.01)
+    page = client.get(urls["result_url"])
+    assert page.status_code == 200 and GOOD.title in page.get_data(as_text=True)
+
+
+def test_page_gives_up_waiting_after_a_few_minutes():
+    page = client_with().get("/").get_data(as_text=True)
+    assert "GIVE_UP_MS = 5 * 60 * 1000" in page and "This is taking too long. Please try again." in page
 
 
 def test_job_ids_are_unguessable_and_old_jobs_are_forgotten():

@@ -157,6 +157,9 @@
     const status = document.getElementById("plan-status");
     const errorBox = document.getElementById("plan-error");
     const POLL_MS = 1000, MAX_MISSES = 5;
+    // The server gives up on a plan after 4 minutes; stop waiting a little after that,
+    // in case the server itself has stopped answering properly.
+    const GIVE_UP_MS = 5 * 60 * 1000, TOO_LONG = "This is taking too long. Please try again.";
     let busy = false;
 
     const say = (message) => { button.textContent = message; status.textContent = message; };
@@ -196,7 +199,9 @@
       }
 
       let misses = 0;
+      const startedAt = Date.now();
       const poll = async () => {
+        if (Date.now() - startedAt > GIVE_UP_MS) return fail(TOO_LONG);
         try {
           const reply = await fetch(job.status_url, { cache: "no-store" });
           const state = await reply.json();
