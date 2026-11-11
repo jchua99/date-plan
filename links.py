@@ -37,7 +37,11 @@ def looks_safe(url: str) -> bool:
 
 
 def page_loads(url: str) -> bool:
-    """True if the page answers with a success (after redirects)."""
+    """True if the page answers with a success (after redirects).
+
+    Only the status is needed, so the body is never read: a slow page can't
+    keep this waiting while it trickles in (see fetching.py).
+    """
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:

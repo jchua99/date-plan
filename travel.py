@@ -9,10 +9,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from fetching import read_with_deadline
 from itinerary import Itinerary, PlanRequest, parse_time
 
 BASE_URL = "https://www.onemap.gov.sg"
 TOKEN_NAME = "ONEMAP_API_TOKEN"
+TIMEOUT_SECONDS = 15  # for each wait for data
+DEADLINE_SECONDS = 20  # for a whole reply, however slowly it arrives
+MAX_REPLY_BYTES = 5_000_000  # a route reply with its map lines is well under this
+TOO_SLOW = "OneMap is taking too long to answer. Try again later."
 
 NO_TOKEN = f"Add {TOKEN_NAME} to your .env file to see travel times."
 TOKEN_EXPIRED = f"The OneMap token has expired (they last 3 days). Paste a new {TOKEN_NAME} into your .env file."
@@ -141,8 +146,8 @@ class OneMap:
     def _get(self, path: str, params: dict) -> dict:
         request = Request(f"{BASE_URL}{path}?{urlencode(params)}", headers={"Authorization": self.token})
         try:
-            with urlopen(request, timeout=15) as response:
-                return json.loads(response.read())
+            with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                return json.loads(read_with_deadline(response, MAX_REPLY_BYTES, DEADLINE_SECONDS))
         except HTTPError as problem:
             if problem.code in (401, 403):
                 raise TravelError(TOKEN_EXPIRED) from None
@@ -151,6 +156,8 @@ class OneMap:
             raise
         except URLError:
             raise TravelError("Couldn't reach OneMap. Check your internet connection.") from None
+        except TimeoutError:
+            raise TravelError(TOO_SLOW) from None
         except ValueError:
             raise TravelError(NO_ROUTE) from None
 

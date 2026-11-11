@@ -34,6 +34,7 @@ from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel
 
+from fetching import read_with_deadline
 from itinerary import Itinerary, Stop
 from links import USER_AGENT, looks_safe, page_loads
 
@@ -54,6 +55,7 @@ REASONING_EFFORT = "low"
 MAX_PAGE_BYTES = 600_000
 MAX_TEXT_CHARS = 2500
 TIMEOUT_SECONDS = 6
+PAGE_DEADLINE_SECONDS = 10  # for the whole page, however slowly it arrives
 
 BOOKING_HOSTS = (
     "chope.co", "sevenrooms.com", "tablecheck.com", "opentable.com", "opentable.sg", "quandoo.sg",
@@ -292,13 +294,18 @@ class _PageReader(HTMLParser):
 
 
 def read_page(url: str) -> tuple[str, str]:
-    """Return (final url, page html) for an https page, following redirects."""
+    """Return (final url, page html) for an https page, following redirects.
+
+    Raises TimeoutError (an OSError) if the page takes more than
+    PAGE_DEADLINE_SECONDS to arrive, so a slow site can't stall the plan.
+    """
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         final = response.geturl()
         if "html" not in (response.headers.get("Content-Type") or "html"):
             return final, ""
-        return final, response.read(MAX_PAGE_BYTES).decode(response.headers.get_content_charset() or "utf-8", "replace")
+        body = read_with_deadline(response, MAX_PAGE_BYTES, PAGE_DEADLINE_SECONDS)
+        return final, body.decode(response.headers.get_content_charset() or "utf-8", "replace")
 
 
 def on_booking_platform(url: str) -> bool:

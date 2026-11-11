@@ -249,8 +249,9 @@ class FakeResponse:
     def __init__(self, body):
         self.body = json.dumps(body).encode()
 
-    def read(self):
-        return self.body
+    def read(self, n=-1):
+        out, self.body = (self.body, b"") if n < 0 else (self.body[:n], self.body[n:])
+        return out
 
     def __enter__(self):
         return self
