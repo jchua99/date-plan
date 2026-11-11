@@ -11,7 +11,7 @@ from jobs import DONE, Jobs
 from planner import PlanError, suggest_plan
 from reservations import PlaceCheck
 from tests.test_planner import GOOD, REQUEST, FakeClient
-from tests.test_app import FORM
+from tests.test_app import BEFORE_THE_PLAN, FORM, at
 
 
 # --- Messages ---
@@ -134,7 +134,7 @@ def planner_that_reports(request, progress):
 
 
 def client_with(planner=planner_that_reports, travel=lambda it, req: None):
-    return create_app(planner=planner, travel=travel, jobs=Jobs(run_in_background=False)).test_client()
+    return create_app(planner=planner, travel=travel, jobs=Jobs(run_in_background=False), now=at(BEFORE_THE_PLAN)).test_client()
 
 
 def test_start_returns_where_to_follow_the_plan():
@@ -155,7 +155,7 @@ def test_status_then_result_show_the_finished_plan():
 
 def test_progress_messages_reach_the_status_endpoint():
     jobs = Jobs(run_in_background=False)
-    app = create_app(planner=planner_that_reports, travel=lambda it, req: None, jobs=jobs)
+    app = create_app(planner=planner_that_reports, travel=lambda it, req: None, jobs=jobs, now=at(BEFORE_THE_PLAN))
     messages = []
     original_start = jobs.start
 

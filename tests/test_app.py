@@ -1,24 +1,77 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
-from app import create_app
+import app as app_module
+from app import SINGAPORE, create_app, singapore_now, singapore_time
 from planner import PlanError
 from tests.test_planner import GOOD
 from tests.test_travel import HAVELOCK_TRIP, FakeOneMap
 from travel import Travel, TravelError, plan_travel
 
 FORM = {"day": "2026-11-14", "start_time": "14:00", "area": "Tiong Bahru"}
+# A fixed "now" in Singapore a few days before FORM's day, so tests don't depend on today's date.
+BEFORE_THE_PLAN = datetime(2026, 11, 11, 9, 30, tzinfo=SINGAPORE)
+
+
+def at(when):
+    return lambda: when
 
 
 def no_travel(itinerary, request):
     return Travel(places=[None] * len(itinerary.stops), legs=[])
 
 
-def client_with(planner, travel=no_travel):
-    return create_app(planner=planner, travel=travel).test_client()
+def client_with(planner, travel=no_travel, now=BEFORE_THE_PLAN):
+    return create_app(planner=planner, travel=travel, now=at(now)).test_client()
 
 
 def fake_travel(itinerary, request):
     return plan_travel(itinerary, request, client=FakeOneMap())
+
+
+# --- Dates are Singapore's, and plans can't be in the past ---
+
+
+def test_default_day_is_today_in_singapore():
+    # 07:00 in Singapore is still the day before on a UTC server.
+    early = datetime(2026, 11, 12, 7, 0, tzinfo=SINGAPORE)
+    page = client_with(lambda r: GOOD, now=early).get("/").get_data(as_text=True)
+    assert 'value="2026-11-12"' in page
+
+
+def test_singapore_now_is_utc_plus_8():
+    assert singapore_now().utcoffset() == timedelta(hours=8)
+
+
+def test_falls_back_to_utc_plus_8_without_a_time_zone_list(monkeypatch):
+    def missing(key):
+        raise app_module.ZoneInfoNotFoundError(key)
+
+    monkeypatch.setattr(app_module, "ZoneInfo", missing)
+    assert singapore_time() == timezone(timedelta(hours=8))
+
+
+def test_day_in_the_past_is_refused():
+    calls = []
+    response = client_with(lambda r: calls.append(r), now=datetime(2026, 11, 15, 9, 0, tzinfo=SINGAPORE)).post("/plan", data=FORM)
+    assert response.status_code == 400
+    assert "That day has already passed" in response.get_data(as_text=True)
+    assert calls == []
+
+
+def test_start_time_already_passed_today_is_refused():
+    calls = []
+    response = client_with(lambda r: calls.append(r), now=datetime(2026, 11, 14, 14, 5, tzinfo=SINGAPORE)).post("/plan", data=FORM)
+    assert response.status_code == 400
+    assert "That start time has already passed" in response.get_data(as_text=True)
+    assert calls == []
+
+
+@pytest.mark.parametrize("now", [datetime(2026, 11, 14, 13, 0), datetime(2026, 11, 14, 14, 0, 45)])
+def test_later_today_is_planned(now):
+    response = client_with(lambda r: GOOD, now=now.replace(tzinfo=SINGAPORE)).post("/plan", data=FORM)
+    assert response.status_code == 200
 
 
 def test_home_shows_the_form():

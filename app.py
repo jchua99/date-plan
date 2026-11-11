@@ -2,7 +2,8 @@
 
 import inspect
 import logging
-from datetime import date
+from datetime import datetime, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pydantic
 from dotenv import load_dotenv
@@ -15,6 +16,26 @@ from planner import PlanError, suggest_plan
 from travel import plan_travel
 
 EXPIRED = "That plan is no longer available. Please make a new one."
+DAY_PASSED = "That day has already passed. Please pick today or a later day."
+TIME_PASSED = "That start time has already passed. Please pick a later time."
+
+
+def singapore_time() -> tzinfo:
+    """Singapore's time zone, wherever the server runs."""
+    try:
+        return ZoneInfo("Asia/Singapore")
+    except ZoneInfoNotFoundError:
+        # Windows has no time zone list unless the tzdata package is installed.
+        # Singapore has been UTC+8 all year round since 1982, so this is the same.
+        return timezone(timedelta(hours=8), "SGT")
+
+
+SINGAPORE = singapore_time()
+
+
+def singapore_now() -> datetime:
+    """The date and time in Singapore right now."""
+    return datetime.now(SINGAPORE)
 
 
 def _takes_progress(fn) -> bool:
@@ -26,9 +47,14 @@ def _takes_progress(fn) -> bool:
     return any(p.name == "progress" or p.kind is p.VAR_KEYWORD for p in params)
 
 
-def create_app(planner=suggest_plan, travel=plan_travel, jobs: Jobs | None = None) -> Flask:
+def create_app(planner=suggest_plan, travel=plan_travel, jobs: Jobs | None = None, now=singapore_now) -> Flask:
+    """`now()` gives the current time in Singapore. Tests pass a fixed one."""
     app = Flask(__name__)
     jobs = jobs or Jobs()
+
+    def blank_form() -> dict:
+        """The form as first shown: today in Singapore, from 14:00."""
+        return {"day": now().date().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE, "start_from": ""}
 
     def make_plan(form: dict, progress=stages.ignore) -> tuple[dict, int]:
         """Everything a plan needs, as (page context, HTTP status). Used by both ways of asking."""
@@ -38,6 +64,13 @@ def create_app(planner=suggest_plan, travel=plan_travel, jobs: Jobs | None = Non
                 raise ValueError
         except (pydantic.ValidationError, ValueError, TypeError):
             return {"form": form, "error": "Please fill in the day, a start time and an area."}, 400
+
+        # Only plan from now on. Times are Singapore's, wherever the server is.
+        right_now = now()
+        if plan_request.day < right_now.date():
+            return {"form": form, "error": DAY_PASSED}, 400
+        if plan_request.day == right_now.date() and plan_request.start_time < right_now.time().replace(second=0, microsecond=0):
+            return {"form": form, "error": TIME_PASSED}, 400
 
         try:
             if _takes_progress(planner):
@@ -62,8 +95,7 @@ def create_app(planner=suggest_plan, travel=plan_travel, jobs: Jobs | None = Non
 
     @app.get("/")
     def home():
-        form = {"day": date.today().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE, "start_from": ""}
-        return render_template("index.html", form=form)
+        return render_template("index.html", form=blank_form())
 
     @app.post("/plan")
     def plan():
@@ -92,8 +124,7 @@ def create_app(planner=suggest_plan, travel=plan_travel, jobs: Jobs | None = Non
     def plan_result(job_id):
         job = jobs.get(job_id)
         if job is None or job.state != DONE:
-            form = {"day": date.today().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE, "start_from": ""}
-            return render_template("index.html", form=form, error=EXPIRED), 404
+            return render_template("index.html", form=blank_form(), error=EXPIRED), 404
         return render_template("index.html", **job.page), job.status_code
 
     return app
