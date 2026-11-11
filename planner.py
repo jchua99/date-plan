@@ -19,7 +19,7 @@ from itinerary import (
 )
 from links import check_booking_links
 import progress as stages
-from reservations import ReservationHarness, check_places, place_name, places_key, use_google_details
+from reservations import ReservationHarness, check_places, is_model, place_name, places_key, use_google_details
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def _ask_for_plan(client, request: PlanRequest, avoid: list[str] = ()) -> Itiner
         raise PlanError(TRY_AGAIN) from None
 
     # Only accept a plan that this model actually wrote.
-    if MODEL not in (response.model or "").lower():
+    if not is_model(response.model, MODEL):
         raise PlanError(f"The plan came from {response.model!r}, not {MODEL_LABEL}, so it wasn't used.")
 
     reply = response.choices[0].message.content if response.choices else None

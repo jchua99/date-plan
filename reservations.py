@@ -150,6 +150,18 @@ OPEN = "OPERATIONAL"
 CLOSED = {"CLOSED_PERMANENTLY": "has closed for good", "CLOSED_TEMPORARILY": "is closed for now"}
 
 
+def is_model(reported: str | None, model: str) -> bool:
+    """True if `reported` (the model id a reply says it came from) is `model`.
+
+    Providers sometimes add their name in front ("zai/glm-5.3-flash") or a
+    version on the end ("glm-5.3-flash-20260101", "glm-5.3-flash@2026-01"), so
+    those are accepted. A different model whose id merely contains this one,
+    such as "glm-5.3-flash-lite", is not.
+    """
+    pattern = r"(?:[\w.-]+/)*" + re.escape(model.lower()) + r"(?:-\d{8}|-\d{4}-\d{2}-\d{2}|@[\w.-]+)?"
+    return re.fullmatch(pattern, (reported or "").strip().lower()) is not None
+
+
 def place_name(place: str) -> str:
     """The name part of what the planner wrote, without the address or directions it
     often adds after a comma or in brackets: "Papi's Tacos (5 Teck Lim Rd, ~10 min walk)"."""
@@ -429,7 +441,7 @@ class ReservationHarness:
                 messages=messages,
                 tools=TOOLS,
             )
-            if self.model not in (response.model or "").lower():
+            if not is_model(response.model, self.model):
                 raise RuntimeError(f"reply came from {response.model!r}")
             message = response.choices[0].message
             calls = message.tool_calls or []

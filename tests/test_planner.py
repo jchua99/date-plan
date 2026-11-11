@@ -88,6 +88,15 @@ def test_reply_from_another_model_is_rejected():
         suggest_plan(REQUEST, client=FakeClient(model="kimi-k3"))
 
 
+def test_reply_from_a_model_whose_id_only_contains_ours_is_rejected():
+    with pytest.raises(PlanError, match="not GLM-5.3 Flash"):
+        suggest_plan(REQUEST, client=FakeClient(model="glm-5.3-flash-lite"))
+
+
+def test_reply_from_our_model_with_a_provider_prefix_is_accepted():
+    assert suggest_plan(REQUEST, client=FakeClient(model="zai/glm-5.3-flash")) == GOOD
+
+
 def test_reads_json_wrapped_in_code_fences():
     assert read_itinerary(f"Here you go:\n```json\n{GOOD.model_dump_json()}\n```") == GOOD
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from itinerary import Itinerary, Stop
-from reservations import ReservationHarness, looks_like_booking
+from reservations import ReservationHarness, is_model, looks_like_booking
 
 MODEL = "glm-5.3-flash"
 SITE = "https://pscafe.example"
@@ -139,6 +139,39 @@ def test_stops_after_max_turns_without_an_answer():
 def test_reply_from_another_model_is_not_used():
     result = harness(ScriptedModel([call("find_place", query="x")], model="other-model")).check_stop(STOP, "x")
     assert result.reservable is None
+
+
+def test_reply_from_a_model_whose_id_only_contains_ours_is_not_used():
+    result = harness(ScriptedModel([call("find_place", query="x")], model="glm-5.3-flash-lite")).check_stop(STOP, "x")
+    assert result.reservable is None
+
+
+@pytest.mark.parametrize("reported", [
+    "glm-5.3-flash",
+    "GLM-5.3-Flash",
+    "zai/glm-5.3-flash",
+    "opencode/zai/glm-5.3-flash",
+    "glm-5.3-flash-20260101",
+    "glm-5.3-flash-2026-01-01",
+    "glm-5.3-flash@2026-01",
+])
+def test_is_model_accepts_our_model_with_a_provider_or_version(reported):
+    assert is_model(reported, MODEL)
+
+
+@pytest.mark.parametrize("reported", [
+    "glm-5.3-flash-lite",
+    "glm-5.3-flash-pro-20260101",
+    "not-glm-5.3-flash",
+    "glm-5.3-flash/other",
+    "my glm-5.3-flash",
+    "glm-5.3-flashy",
+    "glm-5.3",
+    "",
+    None,
+])
+def test_is_model_rejects_other_models(reported):
+    assert not is_model(reported, MODEL)
 
 
 def test_itinerary_updates_only_bookable_stops():
