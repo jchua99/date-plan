@@ -39,6 +39,30 @@ def test_nothing_before_start_time():
         check_itinerary(make("13:30", "15:00", "16:00"), REQUEST)
 
 
+EVENING = REQUEST.model_copy(update={"start_time": time(21, 0)})
+
+
+def test_evening_plan_can_run_past_midnight():
+    plan = make("21:00", "22:30", "00:15")
+    assert check_itinerary(plan, EVENING) is plan
+
+
+def test_stops_after_midnight_must_still_go_forward():
+    with pytest.raises(ItineraryError, match="Stop 4"):
+        check_itinerary(make("21:00", "23:00", "01:00", "00:30"), EVENING)
+
+
+def test_daytime_times_out_of_order_are_still_rejected():
+    # 10:00 after 16:00 isn't a night running on past midnight.
+    with pytest.raises(ItineraryError, match="Stop 3"):
+        check_itinerary(make("14:00", "16:00", "10:00"), REQUEST)
+
+
+def test_early_morning_after_an_afternoon_stop_is_rejected():
+    with pytest.raises(ItineraryError, match="Stop 3"):
+        check_itinerary(make("14:00", "17:00", "01:00"), REQUEST)
+
+
 def test_bad_time_text():
     with pytest.raises(ItineraryError, match="not a time"):
         check_itinerary(make("2pm", "15:00", "16:00"), REQUEST)

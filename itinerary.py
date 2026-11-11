@@ -8,6 +8,13 @@ from pydantic import BaseModel, field_validator
 MIN_STOPS = 3
 MAX_STOPS = 5
 
+# An evening plan can run past midnight. A stop that is earlier on the clock
+# than the stop before it counts as the next day when the stop before is in the
+# evening (from 18:00) and this one is in the small hours (before 06:00).
+EVENING = time(18, 0)
+SMALL_HOURS = time(6, 0)
+MINUTES_IN_A_DAY = 24 * 60
+
 NO_PREFERENCE = "No preference"
 CUISINES = (
     NO_PREFERENCE,
@@ -93,27 +100,41 @@ def parse_time(text: str) -> time:
         raise ItineraryError(f"'{text}' is not a time like 14:30") from None
 
 
+def _minutes(at: time) -> int:
+    """Minutes since midnight."""
+    return at.hour * 60 + at.minute
+
+
 def check_itinerary(itinerary: Itinerary, request: PlanRequest) -> Itinerary:
     """Return the itinerary if it follows the rules, otherwise raise ItineraryError.
 
     Rules: 3-5 stops, every stop has an activity and a place, times are in
     order, nothing starts before the pair said they're free, and if they
-    picked a cuisine, some stop mentions it.
+    picked a cuisine, some stop mentions it. An evening plan may run past
+    midnight: see EVENING and SMALL_HOURS.
     """
     stops = itinerary.stops
     if not MIN_STOPS <= len(stops) <= MAX_STOPS:
         raise ItineraryError(f"Needs {MIN_STOPS}-{MAX_STOPS} stops, got {len(stops)}")
 
-    previous = None
+    # Count every stop in minutes from midnight on the plan's day, so a stop
+    # after midnight comes after the evening stops before it.
+    start = _minutes(request.start_time)
+    previous = previous_time = None
+    next_day = 0
     for number, stop in enumerate(stops, start=1):
         if not stop.activity.strip() or not stop.place.strip():
             raise ItineraryError(f"Stop {number} is missing an activity or a place")
         when = parse_time(stop.time)
-        if when < request.start_time:
+        minutes = _minutes(when) + next_day
+        if previous is not None and minutes <= previous and previous_time >= EVENING and when < SMALL_HOURS:
+            next_day = MINUTES_IN_A_DAY
+            minutes += next_day
+        if minutes < start:
             raise ItineraryError(f"Stop {number} starts before {request.start_time:%H:%M}")
-        if previous is not None and when <= previous:
+        if previous is not None and minutes <= previous:
             raise ItineraryError(f"Stop {number} isn't later than the stop before it")
-        previous = when
+        previous, previous_time = minutes, when
 
     if request.cuisine != NO_PREFERENCE and not mentions_cuisine(itinerary, request.cuisine):
         raise MissingCuisineError(f"No stop mentions {request.cuisine} food")
