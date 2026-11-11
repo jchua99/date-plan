@@ -145,8 +145,11 @@ class OneMap:
         except ValueError:
             raise TravelError(NO_ROUTE) from None
 
-    def find(self, text: str) -> Place | None:
-        """Look a place up by name, trying looser versions of it if the full name isn't found."""
+    def find(self, text: str, near: Place | None = None) -> Place | None:
+        """Look a place up by name, trying looser versions of it if the full name isn't found.
+
+        Chains like Tiong Bahru Bakery have several branches, so pick the result nearest `near`.
+        """
         for search in search_variants(text):
             try:
                 reply = self._get(
@@ -156,8 +159,11 @@ class OneMap:
             except HTTPError:
                 return None
             results = reply.get("results") or []
-            if results:
-                return Place(text, float(results[0]["LATITUDE"]), float(results[0]["LONGITUDE"]))
+            found = [Place(text, float(r["LATITUDE"]), float(r["LONGITUDE"])) for r in results]
+            if found:
+                if near is None:
+                    return found[0]
+                return min(found, key=lambda p: (p.lat - near.lat) ** 2 + (p.lng - near.lng) ** 2)
         return None
 
     def route(self, start: Place, end: Place, day: date, at: time) -> dict | None:
@@ -182,7 +188,7 @@ class OneMap:
 class _NoToken:
     """Used when there's no OneMap token: every lookup fails with a hint to add one."""
 
-    def find(self, text):
+    def find(self, text, near=None):
         raise TravelError(NO_TOKEN)
 
     def route(self, start, end, day, at):
@@ -244,11 +250,11 @@ class _Looker:
         self.client = client
         self.failure: str | None = None
 
-    def find(self, text: str) -> Place | None:
+    def find(self, text: str, near: Place | None = None) -> Place | None:
         if self.failure:
             return None
         try:
-            return self.client.find(text)
+            return self.client.find(text, near)
         except TravelError as problem:
             self.failure = str(problem)
             return None
@@ -285,12 +291,13 @@ def plan_travel(itinerary: Itinerary, request: PlanRequest, client=None) -> Trav
         client = OneMap(token) if token else _NoToken()
 
     looker = _Looker(client)
-    places = [looker.find(stop.place) for stop in stops]
+    area = looker.find(request.area)
+    places = [looker.find(stop.place, near=area) for stop in stops]
 
     start = first_leg = None
     start_text = request.start_from.strip()
     if start_text:
-        start = looker.find(start_text)
+        start = looker.find(start_text, near=area)
         first_stop = stops[0]
         first_leg = looker.leg(start_text, start, first_stop.place, places[0], request.day,
                                _minus(parse_time(first_stop.time), 60), first_stop.time)

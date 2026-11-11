@@ -124,11 +124,12 @@ class FakeOneMap:
 
     def __init__(self, places=PLACES, trip=HAVELOCK_TRIP, error=None):
         self.places, self.trip, self.error = places, trip, error
-        self.routes = []
+        self.routes, self.finds = [], []
 
-    def find(self, text):
+    def find(self, text, near=None):
         if self.error:
             raise self.error
+        self.finds.append((text, near))
         return self.places.get(text)
 
     def route(self, start, end, day, at):
@@ -180,6 +181,14 @@ def test_starting_point_adds_a_first_leg_to_stop_one():
     assert not first.tight  # nothing before the first stop to clash with
     assert client.routes[0][3] == time(13, 0)  # looked up an hour before stop 1
     assert travel.start == PLACES["Outram Park MRT"]
+
+
+def test_stops_are_looked_up_near_the_area():
+    tiong_bahru = Place("Tiong Bahru", 1.2860, 103.8270)
+    client = FakeOneMap(places={**PLACES, "Tiong Bahru": tiong_bahru})
+    plan_travel(GOOD, REQUEST, client=client)
+    assert client.finds[0] == ("Tiong Bahru", None)
+    assert all(near == tiong_bahru for _, near in client.finds[1:])
 
 
 def test_map_pins_are_the_stops_that_were_found():
@@ -270,6 +279,17 @@ def test_find_returns_first_search_result_with_token(monkeypatch):
     query = parse_qs(urlparse(seen[0].full_url).query)
     assert query["searchVal"] == ["Tiong Bahru Bakery"] and query["returnGeom"] == ["Y"]
     assert seen[0].get_header("Authorization") == "secret"
+
+
+def test_find_picks_the_branch_nearest_the_area(monkeypatch):
+    # Real case: "Tiong Bahru Bakery" has branches; OneMap listed Holland Village first.
+    fake_urlopen(monkeypatch, {"found": 2, "results": [
+        {"LATITUDE": "1.3106", "LONGITUDE": "103.7955"},  # Holland Village
+        {"LATITUDE": "1.2843", "LONGITUDE": "103.8327"},  # Tiong Bahru
+    ]})
+    near = Place("Tiong Bahru", 1.2860, 103.8270)
+    assert OneMap("t").find("Tiong Bahru Bakery", near=near) == Place("Tiong Bahru Bakery", 1.2843, 103.8327)
+    assert OneMap("t").find("Tiong Bahru Bakery") == Place("Tiong Bahru Bakery", 1.3106, 103.7955)
 
 
 def test_find_tries_the_name_before_the_comma(monkeypatch):
