@@ -402,6 +402,8 @@ class ReservationHarness:
             args = json.loads(arguments or "{}")
         except json.JSONDecodeError:
             return {"error": "Arguments weren't valid JSON."}
+        if not isinstance(args, dict):  # valid JSON, but e.g. [] or null
+            return {"error": "Arguments must be a JSON object."}
         if name == "find_place":
             return self._find_place(session, str(args.get("query", "")))
         if name == "fetch_page":
@@ -453,7 +455,7 @@ class ReservationHarness:
     # Checking the model's answer
 
     def _verify(self, session: _Session, stop: Stop | None = None) -> ReservationCheck:
-        answer = session.answer or {}
+        answer = session.answer if isinstance(session.answer, dict) else {}
         place = session.places.get(str(answer.get("place_id", "")))
         if place is None:
             return ReservationCheck(reservable=None, reason="Couldn't match the place on Google.")

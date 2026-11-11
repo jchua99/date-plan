@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from itinerary import Itinerary, Stop
-from reservations import ReservationHarness, looks_like_booking
+from reservations import ReservationHarness, _Session, looks_like_booking
 
 MODEL = "glm-5.3-flash"
 SITE = "https://pscafe.example"
@@ -115,6 +115,28 @@ def test_non_platform_booking_link_must_load():
     model = happy_path(booking_url=own)
     assert harness(model, pages=pages, loads=lambda u: False).check_stop(STOP, "x").booking_url == ""
     assert harness(happy_path(booking_url=own), pages=pages, loads=lambda u: True).check_stop(STOP, "x").booking_url == own
+
+
+def raw_call(name, arguments):
+    return SimpleNamespace(id=f"call-{name}", function=SimpleNamespace(name=name, arguments=arguments))
+
+
+@pytest.mark.parametrize("arguments", ["[]", "null", '"x"', "3"])
+def test_arguments_that_arent_an_object_get_an_error_and_the_check_goes_on(arguments):
+    model = ScriptedModel(
+        [raw_call("find_place", arguments), raw_call("submit", arguments)],
+        [call("find_place", query="x")],
+        [call("submit", place_id="place-1", booking_url="", reason="r")],
+    )
+    result = harness(model).check_stop(STOP, "x")
+    errors = [json.loads(m["content"])["error"] for m in model.sent[1][-2:]]
+    assert errors == ["Arguments must be a JSON object."] * 2
+    assert result.reservable is True and result.maps_url == MAPS
+
+
+def test_a_non_object_answer_is_treated_as_no_answer():
+    session = _Session(answer=["place-1"])
+    assert harness(ScriptedModel())._verify(session, STOP).reservable is None
 
 
 def test_model_can_only_open_links_it_was_given():
