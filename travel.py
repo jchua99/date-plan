@@ -132,6 +132,14 @@ def km_between(a: Place, b: Place) -> float:
     return ((a.lat - b.lat) ** 2 + (a.lng - b.lng) ** 2) ** 0.5 * 111
 
 
+def _read_place(name: str, result) -> Place | None:
+    """One OneMap search result as a Place, or None if it's missing its coordinates."""
+    try:
+        return Place(name, float(result["LATITUDE"]), float(result["LONGITUDE"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class OneMap:
     """A small client for OneMap's search and public-transport routing APIs."""
 
@@ -169,8 +177,8 @@ class OneMap:
                 )
             except HTTPError:
                 return None
-            results = reply.get("results") or []
-            found = [Place(text, float(r["LATITUDE"]), float(r["LONGITUDE"])) for r in results]
+            results = (reply.get("results") if isinstance(reply, dict) else None) or []
+            found = [place for place in (_read_place(text, r) for r in results) if place]
             if not found:
                 continue
             if near is None:
@@ -196,8 +204,9 @@ class OneMap:
             reply = self._get("/api/public/routingsvc/route", params)
         except HTTPError:
             return None  # e.g. 404 "No route found"
-        trips = (reply.get("plan") or {}).get("itineraries") or []
-        return trips[0] if trips else None
+        plan = reply.get("plan") if isinstance(reply, dict) else None
+        trips = (plan.get("itineraries") if isinstance(plan, dict) else None) or []
+        return trips[0] if isinstance(trips, list) and trips and isinstance(trips[0], dict) else None
 
 
 class _NoToken:
@@ -292,9 +301,15 @@ class _Looker:
         if trip is None:
             leg.problem = NO_ROUTE
             return leg
-        leg.minutes, leg.route = describe_route(trip)
-        leg.leave_by = leave_by(arrive_at, leg.minutes)
-        leg.path = [point for part in trip["legs"] for point in decode_polyline(part.get("legGeometry", {}).get("points", ""))]
+        try:
+            minutes, route = describe_route(trip)
+            path = [point for part in trip["legs"] for point in decode_polyline(part.get("legGeometry", {}).get("points", ""))]
+        except (IndexError, KeyError, TypeError, ValueError, AttributeError):
+            # OneMap's reply was cut short or not in the usual shape: only this leg misses out.
+            leg.problem = NO_ROUTE
+            return leg
+        leg.minutes, leg.route, leg.path = minutes, route, path
+        leg.leave_by = leave_by(arrive_at, minutes)
         return leg
 
 

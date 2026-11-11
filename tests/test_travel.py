@@ -222,6 +222,43 @@ def test_no_route_found():
     assert all(leg.problem == "Couldn't get travel time for this leg." for leg in travel.legs)
 
 
+class TripsInTurn(FakeOneMap):
+    """Gives each trip in turn, one per leg."""
+
+    def __init__(self, *trips):
+        super().__init__()
+        self.trips = list(trips)
+
+    def route(self, start, end, day, at):
+        super().route(start, end, day, at)
+        return self.trips.pop(0)
+
+
+def cut_short(trip):
+    """The trip with its first leg's map line cut off mid-point, as in issue #35."""
+    trip = json.loads(json.dumps(trip))
+    trip["legs"][0]["legGeometry"]["points"] = "_p~iF~ps|U_"
+    return trip
+
+
+def without_route_name(trip):
+    trip = json.loads(json.dumps(trip))
+    for leg in trip["legs"]:
+        leg.pop("route", None)
+    return trip
+
+
+@pytest.mark.parametrize("broken", [cut_short(HAVELOCK_TRIP), without_route_name(HAVELOCK_TRIP), {"legs": "?"}, ["not", "a", "trip"]])
+def test_malformed_trip_only_affects_its_own_leg(broken):
+    """Issue #35: one bad trip used to make plan_travel raise, losing every leg and the map."""
+    travel = plan_travel(GOOD, REQUEST, client=TripsInTurn(broken, HAVELOCK_TRIP))
+    bad, good = travel.legs
+    assert bad.problem == "Couldn't get travel time for this leg."
+    assert bad.minutes is None and bad.route == "" and bad.path == [] and bad.google_url
+    assert good.problem is None and good.minutes == 37 and good.path
+    assert len(travel.map_data()["paths"]) == 1 and len(travel.map_data()["pins"]) == 3
+
+
 def test_no_places_found_hides_the_map():
     travel = plan_travel(GOOD, REQUEST, client=FakeOneMap(places={}))
     assert not travel.has_map
@@ -354,6 +391,30 @@ def test_search_variants_go_from_exact_to_looser(text, expected):
 def test_find_nothing(monkeypatch):
     fake_urlopen(monkeypatch, {"found": 0, "results": []})
     assert OneMap("t").find("Nowhere") is None
+
+
+def test_find_skips_results_without_usable_coordinates(monkeypatch):
+    fake_urlopen(monkeypatch, {"results": [
+        {"SEARCHVAL": "NO LATITUDE", "LONGITUDE": "103.8"},
+        {"LATITUDE": "not a number", "LONGITUDE": "103.8"},
+        {"LATITUDE": None, "LONGITUDE": "103.8"},
+        "not a result",
+        {"LATITUDE": "1.31", "LONGITUDE": "103.83"},
+    ]})
+    place = OneMap("t").find("Tiong Bahru Bakery")
+    assert (place.lat, place.lng) == (1.31, 103.83)
+
+
+@pytest.mark.parametrize("reply", [{"results": [{"SEARCHVAL": "X"}]}, ["not", "a", "reply"], {"results": "?"}])
+def test_find_treats_a_malformed_reply_as_not_found(monkeypatch, reply):
+    fake_urlopen(monkeypatch, reply)
+    assert OneMap("t").find("Nowhere") is None
+
+
+@pytest.mark.parametrize("reply", [["not", "a", "reply"], {"plan": "?"}, {"plan": {"itineraries": ["?"]}}])
+def test_route_treats_a_malformed_reply_as_no_route(monkeypatch, reply):
+    fake_urlopen(monkeypatch, reply)
+    assert OneMap("t").route(PLACES["Tiong Bahru Bakery"], PLACES["BooksActually"], date(2026, 11, 14), time(15, 0)) is None
 
 
 def test_route_asks_for_public_transport_and_returns_first_trip(monkeypatch):
