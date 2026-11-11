@@ -30,6 +30,7 @@ class Job:
     page: dict = field(default_factory=dict)  # what the result page is rendered with
     status_code: int = 200
     started: float = field(default_factory=time.monotonic)
+    finished: float | None = None  # set when the job is done
 
 
 # The work for one plan: given a way to report progress, returns (page context, HTTP status).
@@ -60,6 +61,7 @@ class Jobs:
                 logger.exception("Plan job %s failed", job.id)
                 page, code = {**fallback_page, "error": "Something went wrong making the plan. Please try again."}, 500
             job.page, job.status_code = page, code
+            job.finished = time.monotonic()
             job.message, job.state = stages.DONE, DONE
 
         if self.run_in_background:
@@ -73,7 +75,9 @@ class Jobs:
             return self._jobs.get(job_id)
 
     def _forget_old(self) -> None:
+        """Forget jobs that finished more than `keep_seconds` ago. Running jobs are always kept."""
         cutoff = time.monotonic() - self.keep_seconds
         with self._lock:
-            for job_id in [j.id for j in self._jobs.values() if j.started < cutoff]:
+            old = [j.id for j in self._jobs.values() if j.state == DONE and j.finished is not None and j.finished < cutoff]
+            for job_id in old:
                 del self._jobs[job_id]

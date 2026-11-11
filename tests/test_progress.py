@@ -1,5 +1,6 @@
 """Issue #15: the page says what's happening while a plan is made."""
 
+import threading
 import time
 
 import pytest
@@ -122,6 +123,33 @@ def test_job_ids_are_unguessable_and_old_jobs_are_forgotten():
     assert len(first.id) >= 20
     jobs.start(lambda r: ({}, 200), fallback_page={})
     assert jobs.get(first.id) is None
+
+
+def test_running_job_is_kept_however_long_it_takes():
+    """Issue #30: starting another plan mustn't delete one that is still being made."""
+    jobs = Jobs(keep_seconds=0.2)
+    release = threading.Event()
+    slow = jobs.start(lambda r: (release.wait(5), ({"form": {}}, 200))[1], fallback_page={})
+    time.sleep(0.3)
+    jobs.start(lambda r: ({"form": {}}, 200), fallback_page={})
+    try:
+        assert jobs.get(slow.id) is slow
+        client = create_app(planner=planner_that_reports, travel=lambda it, req: None, jobs=jobs).test_client()
+        status = client.get(f"/plan/status/{slow.id}")
+        assert status.status_code == 200 and status.get_json()["done"] is False
+    finally:
+        release.set()
+
+
+def test_old_jobs_expire_from_when_they_finished_not_started():
+    jobs = Jobs(keep_seconds=60, run_in_background=False)
+    job = jobs.start(lambda r: ({}, 200), fallback_page={})
+    job.started -= 600  # it took ten minutes...
+    jobs.start(lambda r: ({}, 200), fallback_page={})
+    assert jobs.get(job.id) is job  # ...but only just finished, so it's still there to load
+    job.finished -= 61
+    jobs.start(lambda r: ({}, 200), fallback_page={})
+    assert jobs.get(job.id) is None
 
 
 # --- Routes ---
