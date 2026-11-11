@@ -2,6 +2,8 @@ import json
 import urllib.error
 from types import SimpleNamespace
 
+import httpx2
+import openai
 import pytest
 
 from itinerary import Itinerary, Stop
@@ -34,11 +36,16 @@ def call(name, **args):
 class ScriptedModel:
     """Replies with the next scripted list of tool calls, and records what it was sent."""
 
-    def __init__(self, *turns, model=MODEL):
-        self.turns, self.model, self.sent = list(turns), model, []
+    def __init__(self, *turns, model=MODEL, reject_strict=False):
+        self.turns, self.model, self.sent, self.tools_sent = list(turns), model, [], []
+        self.reject_strict = reject_strict
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
     def _create(self, **kwargs):
+        self.tools_sent.append(kwargs["tools"])
+        if self.reject_strict and any(t["function"].get("strict") for t in kwargs["tools"]):
+            request = httpx2.Request("POST", "https://opencode.ai/inference/openai/v1/chat/completions")
+            raise openai.BadRequestError("strict not supported", response=httpx2.Response(400, request=request), body=None)
         self.sent.append(json.loads(json.dumps(kwargs["messages"])))
         calls = self.turns.pop(0) if self.turns else []
         message = SimpleNamespace(content="", tool_calls=calls or None)
@@ -209,3 +216,23 @@ def test_maps_link_from_the_address_check_is_kept():
     shown = STOP.model_copy(update={"place_id": "place-1", "maps_url": "https://maps.google.com/?cid=shown"})
     checked = harness(happy_path()).check_itinerary(Itinerary(title="T", stops=[shown]), "Dempsey Hill")
     assert checked.stops[0].maps_url == "https://maps.google.com/?cid=shown"
+
+
+def test_tools_are_sent_as_strict_schemas():
+    model = happy_path()
+    harness(model).check_stop(STOP, "Dempsey Hill")
+    for tool in model.tools_sent[0]:
+        function = tool["function"]
+        assert function["strict"] is True, function["name"]
+        parameters = function["parameters"]
+        assert parameters["additionalProperties"] is False
+        assert set(parameters["required"]) == set(parameters["properties"])
+
+
+def test_falls_back_to_non_strict_tools_when_strict_is_rejected(caplog):
+    model = happy_path()
+    model.reject_strict = True
+    result = harness(model).check_stop(STOP, "Dempsey Hill")
+    assert result.reservable is True and result.booking_url == CHOPE
+    assert not any(t["function"].get("strict") for t in model.tools_sent[-1])
+    assert "falling back" in caplog.text.lower()

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
+import openai
 from pydantic import BaseModel
 
 from itinerary import Itinerary, Stop
@@ -88,7 +89,9 @@ TOOLS = [
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": "Place name and area, e.g. 'PS.Cafe Dempsey Hill'"}},
                 "required": ["query"],
+                "additionalProperties": False,
             },
+            "strict": True,
         },
     },
     {
@@ -96,7 +99,13 @@ TOOLS = [
         "function": {
             "name": "fetch_page",
             "description": "Open an https web page. Returns its title, the start of its text, and the booking-looking links on it.",
-            "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            "strict": True,
         },
     },
     {
@@ -112,10 +121,15 @@ TOOLS = [
                     "reason": {"type": "string", "description": "One short sentence on what you found."},
                 },
                 "required": ["place_id", "booking_url", "reason"],
+                "additionalProperties": False,
             },
+            "strict": True,
         },
     },
 ]
+
+# The same tools without "strict", in case OpenCode stops accepting strict tool schemas.
+LOOSE_TOOLS = [{**tool, "function": {k: v for k, v in tool["function"].items() if k != "strict"}} for tool in TOOLS]
 
 
 class ReservationCheck(BaseModel):
@@ -419,16 +433,16 @@ class ReservationHarness:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": _describe(stop, area)},
         ]
+        tools = TOOLS
         for _ in range(MAX_TURNS):
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=MAX_TOKENS,
-                # Without this, each step reasons for up to a minute. Each step is a small
-                # lookup, and the answer is checked afterwards anyway.
-                reasoning_effort=REASONING_EFFORT,
-                messages=messages,
-                tools=TOOLS,
-            )
+            try:
+                response = self._ask(messages, tools)
+            except openai.BadRequestError:
+                if tools is LOOSE_TOOLS:
+                    raise
+                logger.warning("OpenCode rejected strict tool schemas; falling back to non-strict tools")
+                tools = LOOSE_TOOLS
+                response = self._ask(messages, tools)
             if self.model not in (response.model or "").lower():
                 raise RuntimeError(f"reply came from {response.model!r}")
             message = response.choices[0].message
@@ -449,6 +463,18 @@ class ReservationHarness:
             if session.answer is not None:
                 break
         return session
+
+    def _ask(self, messages: list, tools: list):
+        return self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=MAX_TOKENS,
+            # Without this, each step reasons for up to a minute. Each step is a small
+            # lookup, and the answer is checked afterwards anyway.
+            reasoning_effort=REASONING_EFFORT,
+            messages=messages,
+            # Strict tools: OpenCode makes every tool call's arguments match its schema.
+            tools=tools,
+        )
 
     # Checking the model's answer
 
